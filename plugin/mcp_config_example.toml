@@ -1,0 +1,13 @@
+# Example MCP server configuration for ~/.vibe/config.toml
+# Add this to your existing config.toml
+
+[[mcp_servers]]
+name = "m5stack-approval"
+command = "python"
+args = ["-m", "plugin.mcp_server"]
+
+# Optional: set working directory if needed
+# cwd = "/path/to/vibe-m5stack"
+
+# Optional: environment variables
+# env = { PYTHONPATH = "/path/to/vibe-m5stack" }

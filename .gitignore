@@ -1,0 +1,35 @@
+# PlatformIO
+.pio/
+build/
+
+# Arduino
+*.elf
+*.hex
+*.bin
+*.eep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+venv/
+
+# Logs
+*.log
