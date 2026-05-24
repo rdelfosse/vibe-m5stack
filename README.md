@@ -180,6 +180,30 @@ prendre un ping pour une approbation).
 
 ---
 
+## API Mistral — endpoint d'usage manquant
+
+**L'API publique Mistral (`api.mistral.ai`) n'expose aucun endpoint d'usage /
+quota Vibe.** Tous les chemins évidents répondent 404 :
+`/v1/usage`, `/v1/credits`, `/v1/billing`, `/v1/account`, `/v1/organizations`.
+
+L'info existe pourtant : la console web Mistral l'utilise en interne via
+`https://console.mistral.ai/api/billing/v2/vibe-usage` (réponse JSON propre
+avec champ `usage_percentage`). Mais cet endpoint :
+
+- N'est pas documenté dans l'OpenAPI public
+- Refuse l'API key Bearer standard
+- Exige une **session cookie Ory + header CSRF token** (auth web frontend)
+
+Conséquence pour ce projet : la jauge de crédit dépend d'un cookie de session
+qu'on doit extraire manuellement depuis DevTools une fois par mois (cookie Ory
+~30 jours de validité). Voir variables `MISTRAL_SESSION_COOKIE` et
+`MISTRAL_CSRF_TOKEN` dans la doc plugin Python.
+
+**Demande à Mistral** : exposer `usage_percentage` (et idéalement les détails
+par modèle) sur l'API publique authentifiée avec une API key standard. C'est
+une feature triviale côté serveur, qui éviterait à tout consommateur de Vibe
+de scrapper son propre dashboard.
+
 ## Limites connues
 
 - **MCP ne capte que les outils que l'agent décide d'appeler**. Les approbations

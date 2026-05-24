@@ -27,120 +27,54 @@ _bridge: Optional[M5StackBridge] = None
 _credit_task: Optional[asyncio.Task] = None
 
 
+# Vibe usage percentage comes from the Mistral *console* (not the public API),
+# which requires an Ory session cookie + CSRF token. Set these in ~/.vibe/.env:
+#   MISTRAL_SESSION_COOKIE=ory_session_xxx=...; csrftoken=...; (full Cookie value)
+#   MISTRAL_CSRF_TOKEN=<value of csrftoken cookie>
+# Refresh both when they expire (typically every few weeks) by logging in to
+# console.mistral.ai and copying the headers from the /api/billing/v2/vibe-usage
+# request in DevTools.
+VIBE_USAGE_URL = "https://console.mistral.ai/api/billing/v2/vibe-usage"
+
+
 async def fetch_credit_usage() -> int:
-    """
-    Fetch credit usage percentage from Mistral API.
-    Returns percentage used (0-100).
-    Returns -1 on error.
-    """
-    api_key = os.environ.get("MISTRAL_API_KEY")
-    if not api_key:
-        logger.warning("MISTRAL_API_KEY not found, cannot fetch credit usage")
+    """Fetch Vibe usage % (0-100) for the current month. Returns -1 on error."""
+    cookie = os.environ.get("MISTRAL_SESSION_COOKIE")
+    csrf = os.environ.get("MISTRAL_CSRF_TOKEN")
+    if not cookie or not csrf:
+        logger.warning("MISTRAL_SESSION_COOKIE / MISTRAL_CSRF_TOKEN not set — credit gauge disabled")
         return -1
-    
+
     headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
+        "Cookie": cookie,
+        "x-csrftoken": csrf,
+        "Referer": "https://console.mistral.ai/codestral/cli",
+        "Accept": "application/json",
     }
-    
-    # Try multiple endpoints - Mistral API structure may vary
-    endpoints = [
-        "https://api.mistral.ai/v1/usage",
-        "https://api.mistral.ai/v1/users/me",
-    ]
-    
+
     try:
         async with aiohttp.ClientSession() as session:
-            for url in endpoints:
-                try:
-                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            percent = _parse_credit_from_response(data)
-                            if percent >= 0:
-                                return percent
-                        elif response.status == 404:
-                            # Endpoint not found, try next
-                            continue
-                        else:
-                            logger.warning(f"Credit API {url} returned status {response.status}")
-                except aiohttp.ClientError as e:
-                    logger.debug(f"Failed to fetch from {url}: {e}")
-                    continue
-            
-            # Also try to get organization ID and query organization usage
-            try:
-                org_url = "https://api.mistral.ai/v1/organizations"
-                async with session.get(org_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        orgs = await response.json()
-                        if orgs and isinstance(orgs, list) and len(orgs) > 0:
-                            org_id = orgs[0].get("id")
-                            if org_id:
-                                org_usage_url = f"https://api.mistral.ai/v1/organizations/{org_id}/usage"
-                                async with session.get(org_usage_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as org_response:
-                                    if org_response.status == 200:
-                                        org_data = await org_response.json()
-                                        percent = _parse_credit_from_response(org_data)
-                                        if percent >= 0:
-                                            return percent
-            except Exception as e:
-                logger.debug(f"Failed to fetch organization usage: {e}")
-            
-            logger.warning("Could not fetch credit usage from any endpoint")
-            return -1
+            async with session.get(VIBE_USAGE_URL, headers=headers,
+                                   timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 401 or resp.status == 302:
+                    logger.warning("vibe-usage auth expired — refresh session cookie")
+                    return -1
+                if resp.status != 200:
+                    logger.warning(f"vibe-usage HTTP {resp.status}")
+                    return -1
+                data = await resp.json()
+                pct = data.get("usage_percentage")
+                if pct is None:
+                    logger.warning(f"no usage_percentage in response: {data}")
+                    return -1
+                return max(0, min(100, int(round(pct * 100))))
     except Exception as e:
-        logger.warning(f"Unexpected error fetching credit: {e}")
+        logger.warning(f"vibe-usage fetch failed: {e}")
         return -1
-
-
-def _parse_credit_from_response(data: dict) -> int:
-    """
-    Parse credit usage percentage from API response.
-    Returns percentage (0-100) or -1 if cannot parse.
-    """
-    # Try different possible structures
-    
-    # Structure 1: {"usage": {"percent": 75}}
-    if "usage" in data and isinstance(data["usage"], dict):
-        if "percent" in data["usage"]:
-            return int(data["usage"]["percent"])
-        elif "credits" in data["usage"]:
-            usage = data["usage"]["credits"]
-            if "used" in usage and "total" in usage and usage["total"] > 0:
-                return int((usage["used"] / usage["total"]) * 100)
-    
-    # Structure 2: {"credits": {"used": 750, "total": 1000}}
-    elif "credits" in data and isinstance(data["credits"], dict):
-        credits = data["credits"]
-        if "used" in credits and "total" in credits and credits["total"] > 0:
-            return int((credits["used"] / credits["total"]) * 100)
-    
-    # Structure 3: {"quota": {"used": 750, "total": 1000}}
-    elif "quota" in data and isinstance(data["quota"], dict):
-        quota = data["quota"]
-        if "used" in quota and "total" in quota and quota["total"] > 0:
-            return int((quota["used"] / quota["total"]) * 100)
-    
-    # Structure 4: {"data": [{"used_tokens": 750000, "max_tokens": 1000000}]}
-    elif "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
-        item = data["data"][0]
-        if "used_tokens" in item and "max_tokens" in item and item["max_tokens"] > 0:
-            return int((item["used_tokens"] / item["max_tokens"]) * 100)
-    
-    # Structure 5: Direct percent field
-    elif "percent" in data:
-        return int(data["percent"])
-    elif "percentage" in data:
-        return int(data["percentage"])
-    
-    # If we can't parse, log the response for debugging
-    logger.debug(f"Unexpected credit API response structure: {data}")
-    return -1
 
 
 async def send_credit_periodically():
-    """Periodically fetch and send credit usage to M5Stack."""
+    """Periodically fetch usage % and forward to the M5Stack."""
     while True:
         try:
             bridge = get_bridge()
@@ -148,15 +82,13 @@ async def send_credit_periodically():
             if percent >= 0:
                 bridge.send_credit_info(percent)
                 logger.debug(f"Sent credit info: {percent}%")
-            else:
-                # Send N/A (255 or special value)
-                bridge.send_credit_info(0)
-                logger.debug("Sent credit info: N/A")
+            # else: leave the M5Stack's last known value alone — gauge will
+            # naturally show "N/A" only on cold start when nothing was sent.
         except Exception as e:
             logger.warning(f"Error in credit task: {e}")
-        
-        # Wait 5 seconds between updates (matches ping interval)
-        await asyncio.sleep(5)
+
+        # Usage updates server-side at most once per minute; no need to poll faster.
+        await asyncio.sleep(60)
 
 
 def get_bridge() -> M5StackBridge:

@@ -32,18 +32,22 @@ void GifAnimator::draw() {
 
     const uint16_t* frame = all_frames[currentFrame % totalFrames];
 
+    // Last band is shortened from 48 → 28 px so the bottom y=220..240 strip
+    // stays untouched and the credit gauge drawn there isn't erased every frame.
+    constexpr int16_t lastBandH = 28;
+
     for (int b = 0; b < 5; b++) {
         const uint16_t color = bands[b];
         const uint16_t* src  = frame + b * bandH * GIF_WIDTH;
-        for (int i = 0; i < GIF_WIDTH * bandH; i++) {
+        const int16_t  h     = (b == 4) ? lastBandH : bandH;
+        for (int i = 0; i < GIF_WIDTH * h; i++) {
             uint16_t px = src[i];
             bandBuf[i] = (px == MISTRAL_BG) ? color : px;
         }
-        M5.Lcd.pushImage(centerX, b * bandH, GIF_WIDTH, bandH, bandBuf);
+        M5.Lcd.pushImage(centerX, b * bandH, GIF_WIDTH, h, bandBuf);
     }
-    
-    // Draw credit gauge at the bottom
-    drawCreditGauge();
+    // No drawCreditGauge() here: it's painted once in reset() and only re-painted
+    // by setCreditInfo() when the value actually changes.
 }
 
 void GifAnimator::drawStatic(uint8_t frameIdx) {
