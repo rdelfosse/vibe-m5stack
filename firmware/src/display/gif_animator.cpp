@@ -83,11 +83,18 @@ void GifAnimator::reset() {
     for (int i = 0; i < 5; i++) {
         M5.Lcd.fillRect(0, i * bandH, 320, bandH, bands[i]);
     }
+
+    // Paint the gauge once on top of the freshly-drawn rainbow background.
+    drawCreditGauge();
 }
 
 void GifAnimator::setCreditInfo(uint8_t percent, bool valid) {
+    // No-op if nothing changed → avoids 60 fps overwrites and visible flicker
+    // on the bottom strip.
+    if (percent == creditPercent && valid == creditInfoValid) return;
     creditPercent = percent;
     creditInfoValid = valid;
+    drawCreditGauge();
 }
 
 void GifAnimator::drawCreditGauge() const {
