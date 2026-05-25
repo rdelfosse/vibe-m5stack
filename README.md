@@ -60,6 +60,29 @@ Mistral danse sur fond rainbow. Si tu vois ça, le firmware tourne.
 
 ### 2. Installer le plugin Python
 
+#### Option A : Installation editable globale (recommandée)
+
+Pour utiliser `vibe-m5stack` depuis n'importe quel dossier :
+
+```bash
+# Depuis la racine du repo
+pip install -e .
+```
+
+Cela installe le package en mode editable et crée les commandes globales :
+- `vibe-m5stack` — lance Vibe avec le hook M5Stack
+- `m5stack-mcp-server` — lance le serveur MCP (pour config.toml)
+
+**Ajout au PATH (Windows PowerShell admin) :**
+```powershell
+$scriptsDir = "$env:USERPROFILE\AppData\Roaming\uv\tools\mistral-vibe\Scripts"
+[Environment]::SetEnvironmentVariable("Path", "$env:Path;$scriptsDir", "User")
+```
+
+Après ça, tu peux lancer `vibe-m5stack` depuis n'importe quel projet.
+
+#### Option B : Installation locale dans le venv (pour développement)
+
 ```bash
 cd ../plugin
 pip install -r requirements.txt
@@ -78,9 +101,7 @@ Ajouter ce bloc à `~/.vibe/config.toml` (à la racine, pas dans une section) :
 [[mcp_servers]]
 transport = "stdio"
 name = "m5stack"
-command = "python"
-args = ["-m", "plugin.mcp_server"]
-cwd = "/abs/path/to/appro-vibe"     # adapter
+command = "m5stack-mcp-server"
 startup_timeout_sec = 15.0
 tool_timeout_sec = 60.0
 ```
@@ -88,8 +109,12 @@ tool_timeout_sec = 60.0
 **Pièges courants** :
 - Le champ `transport = "stdio"` est obligatoire (discriminator Pydantic, sinon
   Vibe rejette silencieusement)
-- `cwd` doit pointer vers le repo cloné pour que `from plugin.bridge import ...` résolve
-- Si tu utilises un venv, mets le `python.exe` absolu du venv dans `command`
+- **Si tu utilises l'installation locale (Option B)** :
+  ```toml
+  command = "python"
+  args = ["-m", "plugin.mcp_server"]
+  cwd = "/abs/path/to/appro-vibe"     # adapter
+  ```
 - **Ne jamais** garder `mcp_servers = []` ailleurs dans le fichier — conflit TOML
 
 ### 4. (Optionnel) Configurer Vibe pour appeler le tool systématiquement
@@ -108,8 +133,16 @@ command, write to *.env/*.config/*.lock, or PR creation/merge, call
 
 ### 5. Tester
 
+Avec l'installation globale (Option A) :
 ```bash
-vibe
+# Depuis n'importe quel projet
+vibe-m5stack
+```
+
+Avec l'installation locale (Option B) :
+```bash
+cd /path/to/appro-vibe
+python -m plugin
 ```
 
 Dans la session : *"appelle l'outil `m5stack_request_human_approval` avec
