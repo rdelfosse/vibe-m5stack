@@ -177,7 +177,7 @@ async def m5stack_approval_callback(
     
     # Short-circuit: if not connected, return immediately so the race lets the
     # Textual modal win and the user falls back to it.
-    if not _bridge.is_connected:
+    if not _bridge.is_connected():
         return (ApprovalResponse.NO, "M5Stack unavailable")
     
     bridge = _bridge
