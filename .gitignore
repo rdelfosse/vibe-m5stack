@@ -2,6 +2,13 @@
 .pio/
 build/
 
+# Firmware generated files
+firmware/src/display/gif_metadata.h
+firmware/src/display/shake_animation.cpp
+firmware/src/display/shake_animation.h
+firmware/src/inputs/imu.cpp
+firmware/src/inputs/imu.h
+
 # Arduino
 *.elf
 *.hex

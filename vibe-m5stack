@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""
+Vibe M5Stack Wrapper - Launch Vibe CLI with M5Stack approval hook.
+
+This script launches Vibe CLI with the M5Stack approval hook pre-loaded.
+All mutable tool operations (write_file, search_replace, bash, etc.)
+will require physical button approval on the M5Stack device:
+  - A (Button A): Allow the operation
+  - B (Button B): Reject the operation
+  - C (Button C): Cancel the operation
+
+Usage:
+    vibe-m5stack [vibe options...]
+    
+    Example:
+        vibe-m5stack
+        vibe-m5stack "Create a test file"
+        vibe-m5stack --prompt "Write hello to test.txt"
+
+Environment:
+    - M5Stack must be connected via USB (typically COM3 on Windows)
+    - Requires pyserial to be installed
+
+Note:
+    This script must be run from the vibe-m5stack project directory.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# Get the directory where this script is located
+_SCRIPT_DIR = Path(__file__).parent.resolve()
+
+# Set PYTHONPATH to include plugin directory
+os.environ["PYTHONPATH"] = str(_SCRIPT_DIR) + os.pathsep + os.environ.get("PYTHONPATH", "")
+
+print("[M5Stack] Starting Vibe CLI with M5Stack approval hook...", file=sys.stderr)
+print("[M5Stack] Press A=Allow, B=Reject, C=Cancel on M5Stack for tool permissions", file=sys.stderr)
+print("-" * 60, file=sys.stderr)
+
+# Build command: python -m plugin [args...]
+import subprocess
+
+python_cmd = [sys.executable, "-m", "plugin"]
+
+# Add all arguments passed to this script
+if len(sys.argv) > 1:
+    python_cmd.extend(sys.argv[1:])
+
+# Run the command
+try:
+    subprocess.run(python_cmd, check=True)
+except subprocess.CalledProcessError as e:
+    sys.exit(e.returncode)
+except KeyboardInterrupt:
+    pass
