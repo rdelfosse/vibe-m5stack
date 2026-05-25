@@ -40,8 +40,12 @@ if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
 from plugin.bridge import M5StackBridge
+from plugin.m5stack_utils import SessionManager
 from vibe.core.types import ApprovalResponse
 from vibe.core.tools.permissions import RequiredPermission
+
+# Session manager singleton for multi-session support
+_session_mgr = SessionManager()
 
 
 class ThreadSafeM5StackBridge:
@@ -165,10 +169,12 @@ async def m5stack_approval_callback(
         try:
             # Use M5STACK_PORT env var if set
             port = os.environ.get("M5STACK_PORT")
-            raw_bridge = M5StackBridge(port=port, auto_connect=True)
+            # auto_connect=False: use ephemeral connections with file locking
+            raw_bridge = M5StackBridge(port=port, auto_connect=False)
             _bridge = ThreadSafeM5StackBridge(raw_bridge)
+            # Check if port is detectable (not if connection is open)
             if raw_bridge.is_connected:
-                logger.info(f"M5Stack bridge ready on port {raw_bridge.port}")
+                logger.info(f"M5Stack port detected: {raw_bridge.port}")
             else:
                 logger.error("M5Stack auto-detect failed. Set M5STACK_PORT=COMx explicitly.")
         except Exception as e:
@@ -183,6 +189,9 @@ async def m5stack_approval_callback(
     bridge = _bridge
     
     title, body = format_tool_info(tool_name, args)
+    # Prefix title with session name for multi-session identification
+    title = _session_mgr.format_title(title)
+    title = title[:40]  # safe truncate pour M5Stack
     logger.info(f"Permission requested: {title}")
 
     # Request approval from M5Stack

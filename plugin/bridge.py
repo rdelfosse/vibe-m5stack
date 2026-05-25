@@ -2,6 +2,7 @@
 M5Stack Serial Bridge
 
 Handles communication between PC and M5Stack Core 2 via USB Serial.
+Multi-session safe via file lock - opens port per-request, not permanently.
 """
 
 import logging
@@ -10,10 +11,17 @@ import serial.tools.list_ports
 import json
 import time
 import threading
+from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from queue import Queue, Empty
 
+from filelock import FileLock, Timeout
+
 logger = logging.getLogger(__name__)
+
+# Global lock file for multi-session coordination
+_LOCK_PATH = Path.home() / ".vibe" / "m5stack.lock"
+_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 class M5StackBridge:
@@ -29,6 +37,11 @@ class M5StackBridge:
     def __init__(self, port: Optional[str] = None, auto_connect: bool = True):
         """
         Initialize the bridge.
+        
+        Note: By default, auto_connect=True will establish a persistent connection
+        for backwards compatibility (e.g., test_bridge.py).
+        For multi-session usage, set auto_connect=False and use request_approval()
+        which handles connections ephemerally with file locking.
         
         Args:
             port: Specific serial port to use (e.g., 'COM3' or '/dev/ttyUSB0')
@@ -46,7 +59,11 @@ class M5StackBridge:
     
     def connect(self, port: Optional[str] = None) -> bool:
         """
-        Connect to M5Stack device.
+        Connect to M5Stack device and open a persistent connection.
+        
+        Note: This method opens a persistent connection for backwards compatibility
+        with code that uses send()/receive() directly (e.g., test_bridge.py).
+        For normal usage, request_approval() handles connections ephemerally with locking.
         
         Args:
             port: Specific port to connect to. If None, auto-detects.
@@ -75,7 +92,7 @@ class M5StackBridge:
             # Wait for device to initialize
             time.sleep(0.5)
             
-            logger.info(f"Connected to M5Stack on {self.port}")
+            logger.info(f"Connected to M5Stack on {self.port} (persistent connection)")
             return True
         except Exception as e:
             logger.error(f"Failed to connect to {self.port}: {e}")
@@ -217,62 +234,71 @@ class M5StackBridge:
         except Empty:
             return None
     
-    def request_approval(self, title: str, body: str, request_id: int = None) -> Optional[Dict[str, Any]]:
+    def request_approval(self, title: str, body: str, request_id: int | None = None) -> Optional[Dict[str, Any]]:
         """
         Send an approval request to M5Stack.
         
+        Acquires global lock -> connects -> sends -> waits response -> closes -> releases.
+        This enables multi-session safety: multiple vibe instances serialize their
+        approvals via the file lock (FIFO).
+        
         Args:
             title: Short title for the request
-            body: Detailed description
-            request_id: Optional unique identifier
+            body: Detailed description  
+            request_id: Optional unique identifier (auto-generated if None)
         
         Returns:
-            Response message from M5Stack or None on timeout
+            Response message from M5Stack or None on timeout/error
         """
         if request_id is None:
-            request_id = int(time.time() * 1000) % 1000000
+            request_id = int(time.monotonic() * 1000) % 1_000_000
         
-        message = {
-            "type": "approval",
-            "id": request_id,
-            "title": title,
-            "body": body
-        }
-        
-        if not self.send(message):
+        # Resolve port first (outside lock to avoid blocking other sessions during probe)
+        port = self.port or self._auto_detect_port()
+        if not port:
+            logger.warning("M5Stack port not found")
             return None
         
-        # Wait for response with matching request_id, filtering out pings
-        # Total timeout: 35 seconds
-        deadline = time.time() + 35
-        while time.time() < deadline:
-            remaining = deadline - time.time()
-            if remaining <= 0:
+        lock = FileLock(str(_LOCK_PATH))
+        try:
+            # Wait up to 60s for another session to release the M5Stack
+            lock.acquire(timeout=60)
+        except Timeout:
+            logger.warning("M5Stack lock timeout — another vibe session is holding it")
+            return None
+        
+        try:
+            # Open a fresh connection just for this approval
+            with serial.Serial(port, baudrate=self.BAUD_RATE, timeout=self.TIMEOUT) as conn:
+                # Send request
+                message = {"type": "approval", "id": request_id, "title": title, "body": body}
+                conn.write(json.dumps(message).encode("utf-8") + b"\n")
+                conn.flush()
+                
+                # Wait for matching response, filter pings
+                deadline = time.monotonic() + 35.0
+                buf = b""
+                while time.monotonic() < deadline:
+                    if conn.in_waiting:
+                        buf += conn.read(conn.in_waiting or 1)
+                    
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        try:
+                            msg = json.loads(line.decode("utf-8", errors="ignore"))
+                        except Exception:
+                            continue
+                        
+                        if msg.get("type") == "response" and msg.get("id") == request_id:
+                            logger.debug(f"Received approval response for request {request_id}")
+                            return msg
+                    
+                    time.sleep(0.01)
+                
                 logger.warning(f"Approval request {request_id} timed out")
                 return None
-            
-            msg = self.receive(timeout=min(1.0, remaining))
-            if msg is None:
-                continue
-            
-            msg_type = msg.get("type")
-            msg_id = msg.get("id")
-            
-            # Filter out ping messages and other unrelated messages
-            if msg_type == "ping":
-                logger.debug(f"Ignoring ping message")
-                continue
-            
-            # Check if this is our response
-            if msg_type == "response" and msg_id == request_id:
-                logger.debug(f"Received approval response for request {request_id}")
-                return msg
-            
-            # Log unexpected messages
-            logger.debug(f"Unexpected message: type={msg_type}, id={msg_id}")
-        
-        logger.warning(f"Approval request {request_id} timed out")
-        return None
+        finally:
+            lock.release()
     
     def send_credit_info(self, percent: int) -> bool:
         """
@@ -304,5 +330,9 @@ class M5StackBridge:
     
     @property
     def is_connected(self) -> bool:
-        """Check if device is connected."""
-        return self.serial_conn is not None and self.serial_conn.is_open
+        """True if device is connected (persistent connection) or port is detectable."""
+        # For persistent connections (backwards compatibility)
+        if self.serial_conn is not None and self.serial_conn.is_open:
+            return True
+        # For ephemeral mode: port is resolvable
+        return (self.port or self._auto_detect_port()) is not None
