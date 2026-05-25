@@ -1,33 +1,38 @@
 """
 Vibe M5Stack Hook - Intercepts tool permission requests and forwards to M5Stack device.
 
-This module monkey-patches Vibe's AgentLoop to replace the approval callback
-with one that forwards permission requests to the M5Stack device for physical
-button approval (A=Allow, B=Reject, C=Cancel).
+This module monkey-patches Vibe's AgentLoop to wrap the approval callback
+with a race between the native Textual UI modal and the M5Stack device.
+Whichever responds first wins.
 
 Usage:
     This module is automatically loaded by the vibe-m5stack wrapper script.
     It should NOT be imported directly.
 
 Environment:
-    - M5Stack must be connected via USB (typically COM3 on Windows)
+    - M5Stack must be connected via USB
     - Requires pyserial to be installed
+    - Optional: M5STACK_PORT env var to specify port (e.g., "COM8")
 """
 
 import asyncio
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-# Setup logging early
-logging.basicConfig(
-    level=logging.INFO,
-    format="[M5Stack Hook] %(levelname)s: %(message)s",
-)
-logger = logging.getLogger(__name__)
+# Setup logging to file only - NO stderr to avoid TUI pollution
+_log_dir = Path.home() / ".vibe" / "logs"
+_log_dir.mkdir(parents=True, exist_ok=True)
+_handler = logging.FileHandler(_log_dir / "m5stack_hook.log", encoding="utf-8")
+_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger = logging.getLogger("m5stack_hook")
+logger.setLevel(logging.INFO)
+logger.addHandler(_handler)
+logger.propagate = False  # CRITICAL - prevents logs from bubbling to root logger (stderr)
 
 # Add plugin directory to path
 _PLUGIN_DIR = Path(__file__).parent.resolve()
@@ -92,6 +97,7 @@ def get_m5stack_bridge() -> ThreadSafeM5StackBridge | None:
     
     This function now does lazy initialization - the bridge is only created
     on the first approval request, not at module import time.
+    Uses M5STACK_PORT env var if set.
     """
     global _bridge
     return _bridge
@@ -145,8 +151,7 @@ async def m5stack_approval_callback(
     """
     Approval callback that forwards to M5Stack device.
     
-    This replaces Vibe's default approval callback to require physical
-    button press on M5Stack for mutable operations.
+    This is called as part of a race with the original Textual UI callback.
     
     Returns:
         tuple of (ApprovalResponse, optional_message)
@@ -158,12 +163,15 @@ async def m5stack_approval_callback(
     # Lazy initialization - try to connect on first use
     if _bridge is None:
         try:
-            raw_bridge = M5StackBridge(auto_connect=True)
+            # Use M5STACK_PORT env var if set
+            port = os.environ.get("M5STACK_PORT")
+            raw_bridge = M5StackBridge(port=port, auto_connect=True)
             _bridge = ThreadSafeM5StackBridge(raw_bridge)
             if not _bridge.is_connected:
                 logger.warning("M5Stack not connected - will block operations until connected")
         except Exception as e:
             logger.error(f"Failed to initialize M5Stack bridge: {e}")
+            # Return NO but don't crash - let the original callback handle it
             return (ApprovalResponse.NO, f"M5Stack bridge error: {e}")
     
     bridge = _bridge
@@ -197,60 +205,128 @@ async def m5stack_approval_callback(
 # -- Monkey patching --------------------------------------------------------
 
 _original_set_approval_callback: Any = None
-_patched_vibe_app = False
+_patched_agent_loop = False
 
 
 def patch_agent_loop():
-    """Patch AgentLoop.set_approval_callback to use our M5Stack callback."""
-    global _original_set_approval_callback
+    """Patch AgentLoop.set_approval_callback to wrap with M5Stack race."""
+    global _original_set_approval_callback, _patched_agent_loop
+    
+    if _patched_agent_loop:
+        return
     
     from vibe.core.agent_loop import AgentLoop
-    
-    if _original_set_approval_callback is not None:
-        return  # Already patched
     
     _original_set_approval_callback = AgentLoop.set_approval_callback
     
     def patched_set_approval_callback(self, callback):
-        """Intercept and replace with M5Stack callback."""
-        logger.info("Intercepted set_approval_callback - installing M5Stack callback")
-        # Replace the callback with ours
-        self.approval_callback = m5stack_approval_callback
+        """Wrap the original callback to race against M5Stack."""
+        original_cb = callback  # bound method -> TextualUI._approval_callback
+        tui_instance = getattr(callback, "__self__", None)  # TextualUI instance or None
+
+        async def wrapped(tool, args, tool_call_id, required_permissions):
+            # Visual notification in TUI (non-blocking)
+            if tui_instance is not None and hasattr(tui_instance, "notify"):
+                try:
+                    tui_instance.notify(
+                        f"Permission pending: {tool}",
+                        title="M5Stack",
+                        timeout=3,
+                    )
+                except Exception:
+                    pass  # notify may fail outside event-loop, we don't care
+
+            # Launch original AND M5Stack in parallel
+            modal_task = asyncio.create_task(
+                original_cb(tool, args, tool_call_id, required_permissions)
+            )
+            m5_task = asyncio.create_task(
+                m5stack_approval_callback(tool, args, tool_call_id, required_permissions)
+            )
+
+            try:
+                done, pending = await asyncio.wait(
+                    {modal_task, m5_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if m5_task in done and modal_task not in done:
+                    # M5Stack button pressed first -> resolve the Future that Textual
+                    # waits on in tui_instance._pending_approval, this auto-closes the modal.
+                    m5_result = m5_task.result()
+                    for _ in range(50):  # <= 500 ms
+                        pa = getattr(tui_instance, "_pending_approval", None)
+                        if pa is not None and not pa.done():
+                            pa.set_result(m5_result)
+                            break
+                        await asyncio.sleep(0.01)
+                    return await modal_task
+
+                # Modal won -> cancel M5Stack
+                m5_task.cancel()
+                try:
+                    await m5_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                return modal_task.result()
+            except asyncio.CancelledError:
+                modal_task.cancel()
+                m5_task.cancel()
+                raise
+
+        self.approval_callback = wrapped
     
     AgentLoop.set_approval_callback = patched_set_approval_callback
     logger.info("AgentLoop.set_approval_callback patched successfully")
+    _patched_agent_loop = True
 
 
-def patch_vibe_app():
-    """Patch VibeApp to use our callback directly."""
-    global _patched_vibe_app
+def patch_textual_ui():
+    """Patch VibeApp.on_mount to ensure our callback is installed.
     
-    if _patched_vibe_app:
+    Supports both VibeApp (current) and TextualUI (legacy) class names.
+    """
+    global _patched_agent_loop
+    
+    if _patched_agent_loop:
         return
     
-    try:
-        from vibe.cli.textual_ui.app import VibeApp
-    except ImportError:
-        logger.warning("VibeApp not found - will try AgentLoop patch only")
+    # Try both possible class names
+    app_class = None
+    for name in ['VibeApp', 'TextualUI']:
+        try:
+            from vibe.cli.textual_ui.app import VibeApp as _VibeApp
+            app_class = _VibeApp
+            break
+        except ImportError:
+            try:
+                from vibe.cli.textual_ui.app import TextualUI as _TextualUI
+                app_class = _TextualUI
+                break
+            except ImportError:
+                pass
+    
+    if app_class is None:
+        logger.warning("Neither VibeApp nor TextualUI found - will try AgentLoop patch only")
         return
     
-    original_on_mount = VibeApp.on_mount
+    original_on_mount = app_class.on_mount
+    class_name = app_class.__name__
     
     async def patched_on_mount(self):
-        """Patch VibeApp.on_mount to replace approval callback."""
+        """Patch on_mount to ensure approval callback is wrapped."""
         # First, let original on_mount run (it sets up the agent_loop)
         await original_on_mount(self)
         
-        # Now replace the approval callback
+        # Now ensure the approval callback is wrapped
         if hasattr(self, 'agent_loop') and self.agent_loop is not None:
-            logger.info("Replacing VibeApp approval callback with M5Stack callback")
-            self.agent_loop.set_approval_callback(m5stack_approval_callback)
+            logger.info(f"{class_name}.on_mount - ensuring approval callback is wrapped")
+            # This will trigger our patched set_approval_callback
+            self.agent_loop.set_approval_callback(self._approval_callback)
         else:
-            logger.warning("agent_loop not available in VibeApp - patch may have failed")
+            logger.warning(f"agent_loop not available in {class_name} - patch may have failed")
     
-    VibeApp.on_mount = patched_on_mount
-    _patched_vibe_app = True
-    logger.info("VibeApp.on_mount patched successfully")
+    app_class.on_mount = patched_on_mount
+    logger.info(f"{class_name}.on_mount patched successfully")
 
 
 # -- Initialization --------------------------------------------------------
@@ -262,12 +338,11 @@ def install_hook():
     """
     logger.info("Installing Vibe M5Stack approval hook...")
     
-    # Initialize bridge
-    get_m5stack_bridge()
-    
-    # Patch both AgentLoop and VibeApp for maximum compatibility
+    # Patch AgentLoop - this wraps all future set_approval_callback calls
     patch_agent_loop()
-    patch_vibe_app()
+    
+    # Also patch TextualUI.on_mount for extra safety
+    patch_textual_ui()
     
     logger.info("Hook installation complete")
 
