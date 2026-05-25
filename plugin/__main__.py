@@ -18,41 +18,23 @@ if str(_PLUGIN_DIR) not in sys.path:
 import plugin.vibe_m5stack_hook
 
 # Now run Vibe CLI with the patched classes
-# Reconstruct command line: remove '-m', 'plugin', keep the rest
-if len(sys.argv) > 2 and sys.argv[-2] == '-m' and sys.argv[-1] == 'plugin':
-    # Called as: python -m plugin
-    vibe_args = []
-elif len(sys.argv) > 2 and sys.argv[1] == '-m' and sys.argv[2] == 'plugin':
-    # Called as: python -m plugin arg1 arg2
-    vibe_args = sys.argv[3:]
-    sys.argv = ['vibe'] + vibe_args
-else:
-    # Fallback: just pass through
-    vibe_args = sys.argv[1:]
-    sys.argv = ['vibe'] + vibe_args
+# Reconstruct sys.argv for Vibe: replace 'python -m plugin' with 'vibe'
+if len(sys.argv) >= 3 and sys.argv[-2] == '-m' and sys.argv[-1] == 'plugin':
+    # Called as: python -m plugin (no extra args)
+    sys.argv = ['vibe']
+elif len(sys.argv) >= 3 and sys.argv[1] == '-m' and sys.argv[2] == 'plugin':
+    # Called as: python -m plugin arg1 arg2...
+    # Replace 'python -m plugin' with 'vibe'
+    sys.argv = ['vibe'] + sys.argv[3:]
+# else: leave as is (shouldn't happen)
 
 # Import and run Vibe CLI
-from vibe.cli.cli import run_cli
-import argparse
+from vibe.cli.entrypoint import parse_arguments, main
 
-# Parse arguments the same way Vibe does
-parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument('initial_prompt', nargs='?')
-parser.add_argument('-p', '--prompt', nargs='?', const='')
-parser.add_argument('--max-turns', type=int)
-parser.add_argument('--max-price', type=float)
-parser.add_argument('--enabled-tools', action='append')
-parser.add_argument('--output')
-parser.add_argument('--agent')
-parser.add_argument('--setup', action='store_true')
-parser.add_argument('--workdir')
-parser.add_argument('--add-dir', action='append')
-parser.add_argument('--trust', action='store_true')
-parser.add_argument('-c', '--continue', dest='continue_session', action='store_true')
-parser.add_argument('--resume', nargs='?', const=True)
-
+# Parse arguments and run main
 try:
-    args, _ = parser.parse_known_args()
-    run_cli(args)
-except SystemExit:
-    pass
+    args = parse_arguments()
+    main()
+except SystemExit as e:
+    # Preserve exit code
+    sys.exit(e.code if e.code is not None else 0)
