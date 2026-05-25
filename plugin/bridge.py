@@ -82,6 +82,44 @@ class M5StackBridge:
             self.serial_conn = None
             return False
     
+    def _probe_port(self, port_name: str, timeout: float = 1.0) -> bool:
+        """
+        Probe a serial port to check if it's an M5Stack device.
+        
+        Opens the port and listens for JSON messages with a "type" key.
+        Our firmware sends {"type":"ping"} every 5 seconds in IDLE mode.
+        
+        Args:
+            port_name: Name of the port to probe
+            timeout: Maximum time to wait for a valid message
+            
+        Returns:
+            True if the port responds with valid M5Stack JSON, False otherwise
+        """
+        import json as _json
+        import time as _time
+        try:
+            with serial.Serial(port_name, baudrate=self.BAUD_RATE, timeout=0.1) as s:
+                deadline = _time.time() + timeout
+                buf = b""
+                while _time.time() < deadline:
+                    # Read available data
+                    if s.in_waiting:
+                        buf += s.read(s.in_waiting or 1)
+                    # Process complete lines
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        try:
+                            data = _json.loads(line.decode("utf-8", errors="ignore"))
+                            if isinstance(data, dict) and "type" in data:
+                                return True
+                        except Exception:
+                            pass
+                    _time.sleep(0.05)
+            return False
+        except Exception:
+            return False
+
     def _auto_detect_port(self) -> Optional[str]:
         """
         Auto-detect M5Stack Core 2 serial port.
@@ -95,17 +133,23 @@ class M5StackBridge:
         # - Windows: CP210x or CH340 (Silicon Labs CP210x USB to UART Bridge)
         # - Linux/Mac: /dev/ttyUSB0 or /dev/ttyACM0
         
+        candidates = []
         for port in ports:
             port_str = str(port)
             
             # Check for common M5Stack identifiers
             if any(keyword in port_str.upper() for keyword in 
                    ['CP210', 'CH340', 'M5STACK', 'SILABS']):
-                return port.device
+                candidates.append(port.device)
             
             # Also try generic USB serial ports
-            if 'ttyUSB' in port.device or 'ttyACM' in port.device or 'COM' in port.device:
-                return port.device
+            elif 'ttyUSB' in port.device or 'ttyACM' in port.device or 'COM' in port.device:
+                candidates.append(port.device)
+        
+        # Probe each candidate to validate it's actually an M5Stack
+        for port_name in candidates:
+            if self._probe_port(port_name):
+                return port_name
         
         return None
     

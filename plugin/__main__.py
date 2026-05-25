@@ -36,6 +36,10 @@ except ImportError:
 # Load the hook - this monkey-patches AgentLoop
 import plugin.vibe_m5stack_hook
 
+# Check M5STACK_PORT for user feedback (before TUI takes over stderr)
+if not os.environ.get("M5STACK_PORT"):
+    print("[m5stack] M5STACK_PORT not set, auto-detecting...", file=sys.stderr)
+
 # Now run Vibe CLI with the patched classes
 # Reconstruct sys.argv for Vibe: replace 'python -m plugin' with 'vibe'
 if len(sys.argv) >= 3 and sys.argv[-2] == '-m' and sys.argv[-1] == 'plugin':

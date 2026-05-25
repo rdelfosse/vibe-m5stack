@@ -167,12 +167,18 @@ async def m5stack_approval_callback(
             port = os.environ.get("M5STACK_PORT")
             raw_bridge = M5StackBridge(port=port, auto_connect=True)
             _bridge = ThreadSafeM5StackBridge(raw_bridge)
-            if not _bridge.is_connected:
-                logger.warning("M5Stack not connected - will block operations until connected")
+            if raw_bridge.is_connected:
+                logger.info(f"M5Stack bridge ready on port {raw_bridge.port}")
+            else:
+                logger.error("M5Stack auto-detect failed. Set M5STACK_PORT=COMx explicitly.")
         except Exception as e:
             logger.error(f"Failed to initialize M5Stack bridge: {e}")
-            # Return NO but don't crash - let the original callback handle it
-            return (ApprovalResponse.NO, f"M5Stack bridge error: {e}")
+            return (ApprovalResponse.NO, "M5Stack unavailable")
+    
+    # Short-circuit: if not connected, return immediately so the race lets the
+    # Textual modal win and the user falls back to it.
+    if not _bridge.is_connected:
+        return (ApprovalResponse.NO, "M5Stack unavailable")
     
     bridge = _bridge
     
@@ -280,55 +286,6 @@ def patch_agent_loop():
     _patched_agent_loop = True
 
 
-def patch_textual_ui():
-    """Patch VibeApp.on_mount to ensure our callback is installed.
-    
-    Supports both VibeApp (current) and TextualUI (legacy) class names.
-    """
-    global _patched_agent_loop
-    
-    if _patched_agent_loop:
-        return
-    
-    # Try both possible class names
-    app_class = None
-    for name in ['VibeApp', 'TextualUI']:
-        try:
-            from vibe.cli.textual_ui.app import VibeApp as _VibeApp
-            app_class = _VibeApp
-            break
-        except ImportError:
-            try:
-                from vibe.cli.textual_ui.app import TextualUI as _TextualUI
-                app_class = _TextualUI
-                break
-            except ImportError:
-                pass
-    
-    if app_class is None:
-        logger.warning("Neither VibeApp nor TextualUI found - will try AgentLoop patch only")
-        return
-    
-    original_on_mount = app_class.on_mount
-    class_name = app_class.__name__
-    
-    async def patched_on_mount(self):
-        """Patch on_mount to ensure approval callback is wrapped."""
-        # First, let original on_mount run (it sets up the agent_loop)
-        await original_on_mount(self)
-        
-        # Now ensure the approval callback is wrapped
-        if hasattr(self, 'agent_loop') and self.agent_loop is not None:
-            logger.info(f"{class_name}.on_mount - ensuring approval callback is wrapped")
-            # This will trigger our patched set_approval_callback
-            self.agent_loop.set_approval_callback(self._approval_callback)
-        else:
-            logger.warning(f"agent_loop not available in {class_name} - patch may have failed")
-    
-    app_class.on_mount = patched_on_mount
-    logger.info(f"{class_name}.on_mount patched successfully")
-
-
 # -- Initialization --------------------------------------------------------
 
 def install_hook():
@@ -340,9 +297,6 @@ def install_hook():
     
     # Patch AgentLoop - this wraps all future set_approval_callback calls
     patch_agent_loop()
-    
-    # Also patch TextualUI.on_mount for extra safety
-    patch_textual_ui()
     
     logger.info("Hook installation complete")
 
