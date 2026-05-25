@@ -18,35 +18,20 @@ _PLUGIN_DIR = Path(__file__).parent.resolve()
 if str(_PLUGIN_DIR) not in sys.path:
     sys.path.insert(0, str(_PLUGIN_DIR))
 
-# Check if vibe is available, if not try to use uv
+# Check if vibe is available
 try:
     import vibe
-    _vibe_available = True
 except ImportError:
-    _vibe_available = False
-    # Try to find uv and re-execute with it
-    uv_exe = None
-    
-    # Try common locations for uv
-    common_paths = [
-        os.path.join(os.path.expanduser("~"), ".local", "bin", "uv.exe"),
-        os.path.join(os.path.expanduser("~"), ".local", "bin", "uv"),
-        os.path.join(_PLUGIN_DIR.parent, ".venv", "Scripts", "uv.exe"),
-    ]
-    
-    for path in common_paths:
-        if os.path.exists(path):
-            uv_exe = path
-            break
-    
-    if uv_exe:
-        # Re-execute with uv run
-        new_cmd = [uv_exe, "run", sys.executable, "-m", "plugin"] + sys.argv[3:]
-        sys.exit(subprocess.run(new_cmd).returncode)
-    else:
-        print("Error: 'vibe' package not found.", file=sys.stderr)
-        print("Please install mistral-vibe or use: uv run python -m plugin", file=sys.stderr)
-        sys.exit(1)
+    # vibe not installed - provide clear instructions
+    print("Error: 'vibe' package not found in current Python environment.", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("To use the M5Stack approval hook, please use one of:", file=sys.stderr)
+    print("  1. uv run python -m plugin [args...]", file=sys.stderr)
+    print("  2. .\vibe-m5stack [args...]  (from project directory)", file=sys.stderr)
+    print("  3. python -m plugin [args...]  (if vibe is installed in current env)", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("Make sure mistral-vibe is installed in the Python environment you're using.", file=sys.stderr)
+    sys.exit(1)
 
 # Load the hook - this monkey-patches AgentLoop
 import plugin.vibe_m5stack_hook
