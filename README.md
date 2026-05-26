@@ -46,19 +46,97 @@ un brown-out reset au premier allumage des LEDs.
 
 ### 1. Cloner et flasher le firmware
 
+#### 1.a. Pré-requis : driver USB
+
+Le M5Stack Fire utilise une puce **Silicon Labs CP210x**. Sans le driver, l'OS
+ne voit pas le device.
+
+- **Windows** : installer https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers
+  puis vérifier :
+  ```powershell
+  Get-PnpDevice -Class Ports -Status OK | Where-Object Name -like "*CP210*"
+  ```
+  Une ligne avec `(COMx)` doit apparaître après branchement USB.
+- **Linux** : module `cp210x` en kernel standard, rien à installer.
+  Vérifier après branchement : `dmesg | tail -20` → `cp210x converter now attached to ttyUSB0`.
+- **Mac** : driver dans le même installer Silicon Labs, ou `brew install --cask silicon-labs-vcp-driver`.
+
+#### 1.b. Installer PlatformIO Core
+
+Pas l'IDE, juste le CLI. Si pas déjà fait :
+
+```bash
+pip install -U platformio
+# ou via pipx pour isoler :
+pipx install platformio
+```
+
+Vérifier : `pio --version` doit retourner `PlatformIO Core, version 6.x`.
+
+#### 1.c. Cloner et identifier le port
+
 ```bash
 git clone https://github.com/rdelfosse/appro-vibe.git
 cd appro-vibe/firmware
-
-# Ajuster monitor_port = COM8 dans platformio.ini selon ton port
-# (Linux/Mac: /dev/ttyUSB0 ou /dev/cu.SLAB_USBtoUART)
-
-pio run -t upload
-pio device monitor   # optionnel, pour voir les logs
 ```
 
-Au boot, séquence diagnostique : 🔴 800 ms → 🟢/🔵 5 s (stats RAM) → puis le cat
-Mistral danse sur fond rainbow. Si tu vois ça, le firmware tourne.
+Trouver le port serial du M5Stack :
+
+```powershell
+# Windows
+Get-PnpDevice -Class Ports -Status OK | Where-Object Name -like "*CP210*"
+# → Name : Silicon Labs CP210x USB to UART Bridge (COM8)  →  COM8
+```
+
+```bash
+# Linux/Mac
+ls /dev/tty* | grep -E "USB|usbserial|SLAB"
+# → /dev/ttyUSB0 (Linux) ou /dev/cu.SLAB_USBtoUART (Mac)
+```
+
+Édite `platformio.ini` ligne `monitor_port =` avec ton port (le `upload_port`
+est auto-détecté).
+
+#### 1.d. Compiler et flasher
+
+```bash
+pio run -t upload
+pio device monitor   # optionnel, pour voir les logs et messages JSON
+```
+
+**La première compile prend 1 à 3 minutes** : PlatformIO télécharge M5Stack
+(~50 MB), FastLED, ArduinoJson et le toolchain ESP32 (~250 MB cumul). Les
+compiles suivantes prennent ~10 s grâce au cache local. Si la console semble
+figée 30 s sans output, c'est probablement un téléchargement, attends.
+
+#### 1.e. Validation visuelle
+
+Juste après l'upload, le M5Stack reboote automatiquement. Tu dois voir :
+
+| Phase | Durée | Affichage | Signification |
+|---|---|---|---|
+| 1 | 0.8 s | 🔴 Rouge plein écran | `M5.begin()` OK, LCD répond |
+| 2 | 5 s | 🟢 Vert ou 🔵 Bleu avec stats (`sprite: OK`, `dram: ...`) | Sprite d'animation alloué (vert) ou échec (bleu — vérifier `dram` vs `need`) |
+| 3 | ∞ | **Chat Mistral pixel art** dansant sur 5 bandes rainbow | Mode IDLE, firmware tourne |
+
+**Si tu vois le chat, le firmware est correctement flashé.** Reste à brancher le plugin Python (étape 2).
+
+#### 1.f. Troubleshooting upload
+
+| Erreur | Cause | Fix |
+|---|---|---|
+| `Failed to connect to ESP32: Timed out waiting for packet header` | M5Stack ne répond pas en mode bootloader | Maintiens le bouton **Reset** enfoncé, lance `pio run -t upload`, relâche dès "Connecting..." apparaît |
+| `Access is denied` / `PermissionError(13)` sur le port | Port occupé par un autre process (souvent `pio device monitor` resté ouvert) | Ferme tous les terminaux qui écoutent le port. Sur Windows : `Get-Process` puis `Stop-Process` sur les pio résiduels |
+| `Could not open <port>, the port doesn't exist` | Mauvais COM dans `platformio.ini` ou driver pas installé | Re-vérifie 1.a puis 1.c |
+| `Écran reste noir après flash` | Câble USB sans data (charge only) ou flash incomplète | Essaie un autre câble USB-C → A, retry `pio run -t upload` |
+| `sprite: FAIL` en phase 2 du canary | DRAM insuffisante au moment de `createSprite` | Vérifie la valeur `dram` affichée vs `need`. Possible bug de fragmentation, fais un reset hardware (bouton Reset) puis re-flash |
+
+#### 1.g. Note PSRAM (avancé, optionnel)
+
+Le firmware **désactive la PSRAM par défaut** (`board_build.psram` est commenté
+dans `platformio.ini`) pour libérer GPIO 16/17 = Port C, utilisé par les
+NeoPixel optionnels. Si tu n'as **pas** de NeoMatrix sur Port C et veux plus
+de RAM disponible, décommente la ligne dans `platformio.ini` et re-flash.
 
 ### 2. Installer le plugin Python
 
