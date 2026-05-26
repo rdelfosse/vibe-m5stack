@@ -91,8 +91,10 @@ Après ça, tu peux lancer `vibe-m5stack` depuis n'importe quel projet.
 ```powershell
 [Environment]::SetEnvironmentVariable("M5STACK_PORT", "COM8", "User")
 # Adapte COM8 selon ton port (Get-PnpDevice -Class Ports te le donne)
+```
 
-Set pour une session :
+**Set pour une session** :
+```powershell
 $env:M5STACK_PORT = "COM8"
 $env:VIBE_SESSION_NAME = "mon-projet"
 ```
@@ -132,11 +134,11 @@ vibe-m5stack
 cd C:\projets\beta
 $env:VIBE_SESSION_NAME = "beta"
 vibe-m5stack
+```
 
-L'écran M5Stack affiche [alpha] write foo.py ou [beta] git commit selon
+L'écran M5Stack affiche `[alpha] write foo.py` ou `[beta] git commit` selon
 qui demande. Si deux sessions demandent en même temps, la deuxième attend
 que la première relâche le M5Stack (timeout 60s).
-```
 
 ### Comment ça marche — le hook approval
 
@@ -165,7 +167,7 @@ Code : `plugin/vibe_m5stack_hook.py`, fonction `_patched_approval_callback`.
 
 | Quoi | Où |
 |---|---|
-| Couleurs Mistral (rainbow) | `firmware/src/display/gif_animator.cpp` (anim) + `firmware/src/display/screen.cpp` (approval) + `firmware/src/inputs/leds.cpp` (LEDs) |
+| Couleurs Mistral (rainbow) | `firmware/src/display/gif_animator.cpp` (anim idle) + `firmware/src/inputs/leds.cpp` (LEDs) |
 | Vitesse du chase LED ring | `leds.cpp:updateApprovalAnimation` — `> 180` (ms entre steps) |
 | Vitesse cycle couleur matrices | `leds.cpp` — `> 400` |
 | Brightness LEDs / cap courant | `leds.cpp:begin()` — `setBrightness(32)` + `setMaxPowerInVoltsAndMilliamps(5, 400)` |

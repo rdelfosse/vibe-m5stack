@@ -37,6 +37,11 @@ Thumbs.db
 # Environment
 .env
 venv/
+.venv/
+
+# Build/install artifacts
+*.egg-info/
+uv.lock
 
 # Logs
 *.log
