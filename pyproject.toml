@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "appro-vibe"
+version = "0.2.0"
+description = "Physical approval device (M5Stack Fire) for Mistral Vibe CLI"
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5",
+    "mcp>=1.0.0",
+    "aiohttp>=3.8.0",
+    "filelock>=3.13",
+]
+
+[project.scripts]
+vibe-m5stack = "plugin.__main__:main"
+m5stack-mcp-server = "plugin.mcp_server:main"
+
+[tool.setuptools]
+packages = ["plugin"]
