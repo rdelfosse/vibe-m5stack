@@ -38,3 +38,6 @@ uv.lock
 
 # Logs
 *.log
+
+# Local scratch / tool outputs
+.tmp/

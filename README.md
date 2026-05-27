@@ -140,23 +140,35 @@ de RAM disponible, décommente la ligne dans `platformio.ini` et re-flash.
 
 ### 2. Installer le plugin Python
 
-Pour utiliser `vibe-m5stack` depuis n'importe quel dossier :
+`mistral-vibe` est installé via `uv tool install mistral-vibe`, ce qui crée un venv
+isolé dans `~\AppData\Roaming\uv\tools\mistral-vibe\`. Le plugin `appro-vibe` doit
+être injecté **dans ce même venv**, sinon l'import `vibe` échoue à l'exécution.
 
 ```bash
-# Depuis la racine du repo
-pip install -e .
+# Depuis la racine du repo (adapte le chemin absolu à ton clone)
+uv tool install --reinstall mistral-vibe --with-editable .
 ```
 
-Cela installe le package en mode editable et crée la commande globale :
-- `vibe-m5stack` — lance Vibe avec le hook M5Stack
+Cela :
+1. Reconstruit le venv `mistral-vibe`.
+2. Y installe `appro-vibe` en editable + dépendances (`pyserial`, `mcp`, `aiohttp`, `filelock`).
+3. Dépose `vibe-m5stack` (et `vibe`, `vibe-acp`) dans `~\.local\bin\`, qui est déjà
+   sur le PATH dès que `vibe` fonctionne — **rien à modifier côté PATH**.
 
-**Ajout au PATH (Windows PowerShell admin) :**
+Vérifie :
 ```powershell
-$scriptsDir = "$env:USERPROFILE\AppData\Roaming\uv\tools\mistral-vibe\Scripts"
-[Environment]::SetEnvironmentVariable("Path", "$env:Path;$scriptsDir", "User")
+Get-Command vibe-m5stack    # doit pointer sur ~\.local\bin\vibe-m5stack.exe
 ```
 
-Après ça, tu peux lancer `vibe-m5stack` depuis n'importe quel projet.
+> ⚠️ **Ne pas faire `pip install -e .`** : ce `pip` est celui de ton Python système
+> ou user, pas celui du venv `mistral-vibe`. Le binaire `vibe-m5stack` n'atterrit
+> alors pas sur le PATH, et même s'il y était il échouerait au premier `import vibe`
+> (`vibe` vit dans un autre venv).
+>
+> Cas particulier : `pip install -e .` *fonctionne* si tu actives manuellement le
+> venv `mistral-vibe` (`. ~\AppData\Roaming\uv\tools\mistral-vibe\Scripts\Activate.ps1`)
+> avant. La commande `uv tool install --with-editable` ci-dessus fait ça
+> proprement pour toi.
 
 ### 2bis. Variables d'environnement obligatoires
 

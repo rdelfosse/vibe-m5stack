@@ -43,17 +43,25 @@ This branch implements a monkey-patching approach that intercepts permission cal
 
 **Usage:**
 ```bash
-# Method 1: Using the wrapper script
+# Method 1: Global command (after `uv tool install --reinstall mistral-vibe --with-editable .` — see main README §2)
+vibe-m5stack [vibe options...]
+
+# Method 2: Wrapper script from repo root — bash/zsh only
 ./vibe-m5stack [vibe options...]
 
-# Method 2: Using Python module
+# Method 3: Using Python module
 python -m plugin [vibe options...]
 
 # Examples:
-./vibe-m5stack
-./vibe-m5stack "Create a test file"
-./vibe-m5stack --prompt "Write hello to test.txt"
+vibe-m5stack
+vibe-m5stack "Create a test file"
+vibe-m5stack --prompt "Write hello to test.txt"
 ```
+
+> **Note Windows / PowerShell** : `./vibe-m5stack` ne fonctionne pas — le fichier est
+> sans extension et sans shebang exécutable sous Windows. Utilise soit la commande
+> globale `vibe-m5stack` après l'install (Method 1, recommandé), soit
+> `python .\vibe-m5stack` / `python -m plugin` (Method 3) depuis la racine du repo.
 
 **Environment:**
 - M5Stack must be connected via USB (typically COM3 on Windows)
