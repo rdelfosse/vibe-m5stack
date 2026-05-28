@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "appro-vibe"
+name = "vibe-m5stack"
 version = "0.2.0"
 description = "Physical approval device (M5Stack Fire) for Mistral Vibe CLI"
 requires-python = ">=3.10"

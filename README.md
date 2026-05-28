@@ -1,4 +1,4 @@
-# appro-vibe
+# vibe-m5stack
 
 Approbation physique pour [Mistral Vibe CLI](https://mistral.ai/) via un M5Stack Fire.
 Quand l'agent veut faire quelque chose de sensible (commit, push, écriture fichier
@@ -76,8 +76,8 @@ Vérifier : `pio --version` doit retourner `PlatformIO Core, version 6.x`.
 #### 1.c. Cloner et identifier le port
 
 ```bash
-git clone https://github.com/rdelfosse/appro-vibe.git
-cd appro-vibe/firmware
+git clone https://github.com/rdelfosse/vibe-m5stack.git
+cd vibe-m5stack/firmware
 ```
 
 Trouver le port serial du M5Stack :
@@ -252,22 +252,22 @@ Une fois le debug terminé, remet `USE_BT_SERIAL` à `1` et re-flash.
 ### 2. Installer le plugin Python
 
 `mistral-vibe` est installé via `uv tool install mistral-vibe`, ce qui crée un venv
-isolé dans `~\AppData\Roaming\uv\tools\mistral-vibe\`. Le plugin `appro-vibe` doit
+isolé dans `~\AppData\Roaming\uv\tools\mistral-vibe\`. Le plugin `vibe-m5stack` doit
 être injecté **dans ce même venv**, sinon l'import `vibe` échoue à l'exécution.
 
 Depuis la racine du repo (le `.` final compte) :
 
 ```bash
-uv tool install --reinstall mistral-vibe --with-editable . --with-executables-from appro-vibe
+uv tool install --reinstall mistral-vibe --with-editable . --with-executables-from vibe-m5stack
 ```
 
 Cela :
 1. Reconstruit le venv `mistral-vibe`.
-2. Y installe `appro-vibe` en editable + dépendances (`pyserial`, `mcp`, `aiohttp`, `filelock`).
+2. Y installe `vibe-m5stack` en editable + dépendances (`pyserial`, `mcp`, `aiohttp`, `filelock`).
 3. Expose les entrypoints **des deux packages** dans `~\.local\bin\` :
-   `vibe`, `vibe-acp` (de mistral-vibe) + `vibe-m5stack`, `m5stack-mcp-server` (de appro-vibe).
+   `vibe`, `vibe-acp` (de mistral-vibe) + `vibe-m5stack`, `m5stack-mcp-server` (de vibe-m5stack).
 
-> ⚠️ **`--with-executables-from appro-vibe` est obligatoire.** Sans cette flag,
+> ⚠️ **`--with-executables-from vibe-m5stack` est obligatoire.** Sans cette flag,
 > `uv tool install` n'expose que les entrypoints du tool principal (`mistral-vibe`).
 > `vibe-m5stack.exe` est bien créé dans le venv (`~\AppData\Roaming\uv\tools\mistral-vibe\Scripts\`)
 > mais n'apparaît jamais sur le PATH, et la commande `vibe-m5stack` reste introuvable.
@@ -285,7 +285,7 @@ Get-ChildItem $env:USERPROFILE\.local\bin -Filter "vibe*","m5stack*"
 
 Si `Get-Command vibe-m5stack` ne retourne rien, l'install a échoué silencieusement.
 Causes typiques :
-- Tu as oublié `--with-executables-from appro-vibe` (cas n°1, voir encadré ci-dessus).
+- Tu as oublié `--with-executables-from vibe-m5stack` (cas n°1, voir encadré ci-dessus).
 - Un `vibe-m5stack` tourne déjà et verrouille `vibe-m5stack.exe` → ferme le terminal
   qui héberge la session, ou `Stop-Process -Name vibe-m5stack`, puis relance la commande.
 - Tu n'as pas lancé depuis la racine du repo (le `.` pointe sur le mauvais dossier).

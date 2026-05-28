@@ -1,8 +1,8 @@
-"""End-to-end test of the appro-vibe hook, bypassing Vibe entirely.
+"""End-to-end test of the vibe-m5stack hook, bypassing Vibe entirely.
 
 Directly invokes plugin.vibe_m5stack_hook.m5stack_approval_callback with a fake
 write_file request. If the M5Stack screen lights up and the button press
-produces a real ApprovalResponse, the entire appro-vibe pipeline is proven OK
+produces a real ApprovalResponse, the entire vibe-m5stack pipeline is proven OK
 — hook -> bridge -> BT -> firmware -> button -> response.
 
 Use this whenever you suspect the M5Stack/BT side and want to rule out Vibe
