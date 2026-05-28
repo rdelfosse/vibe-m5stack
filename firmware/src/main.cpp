@@ -4,6 +4,7 @@
 #include "inputs/buttons.h"
 #include "inputs/leds.h"
 #include "serial/protocol.h"
+#include "serial/serial_io.h"
 
 // Application states
 enum class AppState {
@@ -80,7 +81,7 @@ void loop() {
             
             // Send periodic ping
             if (::millis() - lastPingTime > 5000) {
-                Serial.println("{\"type\":\"ping\"}");
+                bridgeSerial.println("{\"type\":\"ping\"}");
                 lastPingTime = ::millis();
             }
             break;

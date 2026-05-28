@@ -1,7 +1,8 @@
 #include "protocol.h"
+#include "serial_io.h"
 #include <Arduino.h>
 
-SerialProtocol::SerialProtocol() 
+SerialProtocol::SerialProtocol()
     : lastMessageType(MessageType::INVALID), 
       lastRequestId(0),
       lastCreditPercent(0),
@@ -12,23 +13,20 @@ SerialProtocol::SerialProtocol()
 }
 
 void SerialProtocol::begin(uint32_t baud) {
-    Serial.begin(baud);
-    while (!Serial) {
-        ::delay(10);
-    }
+    bridgeSerialBegin(baud);
 }
 
 bool SerialProtocol::receive() {
-    if (!Serial.available()) {
+    if (!bridgeSerial.available()) {
         return false;
     }
-    
+
     // Read JSON from serial
-    DeserializationError error = deserializeJson(rxDoc, Serial);
-    
+    DeserializationError error = deserializeJson(rxDoc, bridgeSerial);
+
     if (error) {
         // Clear buffer on error
-        while (Serial.available()) Serial.read();
+        while (bridgeSerial.available()) bridgeSerial.read();
         return false;
     }
     
@@ -85,16 +83,16 @@ void SerialProtocol::sendResponse(uint32_t requestId, ApprovalResponse response)
             break;
     }
     
-    serializeJson(txDoc, Serial);
-    Serial.println();
+    serializeJson(txDoc, bridgeSerial);
+    bridgeSerial.println();
 }
 
 void SerialProtocol::sendAck(uint32_t requestId) {
     txDoc.clear();
     txDoc["type"] = "ack";
     txDoc["id"] = requestId;
-    serializeJson(txDoc, Serial);
-    Serial.println();
+    serializeJson(txDoc, bridgeSerial);
+    bridgeSerial.println();
 }
 
 MessageType SerialProtocol::getMessageType() const {

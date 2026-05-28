@@ -129,6 +129,7 @@ Juste après l'upload, le M5Stack reboote automatiquement. Tu dois voir :
 | `Access is denied` / `PermissionError(13)` sur le port | Port occupé par un autre process (souvent `pio device monitor` resté ouvert) | Ferme tous les terminaux qui écoutent le port. Sur Windows : `Get-Process` puis `Stop-Process` sur les pio résiduels |
 | `Could not open <port>, the port doesn't exist` | Mauvais COM dans `platformio.ini` ou driver pas installé | Re-vérifie 1.a puis 1.c |
 | `Écran reste noir après flash` | Câble USB sans data (charge only) ou flash incomplète | Essaie un autre câble USB-C → A, retry `pio run -t upload` |
+| `Get-PnpDevice` montre le CP210x mais `Status: Unknown` / `Present: False`, écran allumé et chat danse pourtant | Câble USB charge-only (très fréquent sur câbles bon marché ou livrés avec accessoires non-data). Le M5Stack tire son 5V mais les paires data USB ne passent pas → Windows ne voit aucun device fonctionnel. | Changer le câble pour un câble USB-C → A clairement data (celui d'un smartphone qui fait la sync PC, ou le câble M5Stack d'origine). Un câble data déclenche le "ding" Windows de re-énumération à chaque branchement ; un câble charge-only reste silencieux. |
 | `sprite: FAIL` en phase 2 du canary | DRAM insuffisante au moment de `createSprite` | Vérifie la valeur `dram` affichée vs `need`. Possible bug de fragmentation, fais un reset hardware (bouton Reset) puis re-flash |
 
 #### 1.g. Note PSRAM (avancé, optionnel)
@@ -138,27 +139,157 @@ dans `platformio.ini`) pour libérer GPIO 16/17 = Port C, utilisé par les
 NeoPixel optionnels. Si tu n'as **pas** de NeoMatrix sur Port C et veux plus
 de RAM disponible, décommente la ligne dans `platformio.ini` et re-flash.
 
+#### 1.h. Mode wireless Bluetooth Classic (SPP)
+
+Sur certains laptops (typiquement chipsets Intel USB 3.1 sur Lenovo ThinkPad),
+**chaque ouverture du port serial provoque un `POWERON_RESET` du M5Stack** —
+la pile USB Windows cycle VBUS au moment de l'open, le M5Stack reboot, l'approval
+JSON envoyé immédiatement après est perdu pendant le boot, timeout 35s. Symptôme
+visible : à chaque approval, écran du M5Stack passe par la séquence canary (rouge
+→ vert → chat) et l'approval n'arrive jamais. Un câble data correct, un port
+USB 3.0 direct, un hub alimenté, et l'alim secteur ne changent rien. Cause :
+chipset/driver USB de l'hôte, pas le M5Stack.
+
+**Solution durable** : mode Bluetooth Classic SPP. Le M5Stack expose un service
+Bluetooth nommé `M5Stack-Vibe`, Windows assigne un COM virtuel après pairing,
+et `bridge.py` lit ce COM exactement comme un serial USB — aucune modification
+côté Python. Le M5Stack est alimenté par n'importe quel chargeur USB-C (pas
+besoin de data sur le câble d'alim) → 0 reset, jamais.
+
+Trade-offs :
+- Tu **perds `pio device monitor` over USB** (le firmware n'écoute plus le serial
+  USB en mode BT). Pour debugger en série il faut repasser temporairement en USB,
+  voir ci-dessous.
+- Pairing Windows à faire 1×.
+- Latence approval +~50 ms (imperceptible vs serial USB).
+- Le firmware BT alourdit le binaire (~280 KB) et consomme ~30 KB DRAM supplémentaires.
+
+##### Activer le mode BT
+
+Le switch est dans `firmware/src/serial/serial_io.h` :
+
+```cpp
+#ifndef USE_BT_SERIAL
+#define USE_BT_SERIAL 1   // 1 = Bluetooth Classic SPP, 0 = USB serial
+#endif
+```
+
+Sur la branche `feat/bt-serial`, c'est déjà à `1` par défaut. Sur `main`, c'est
+à `0` (USB) — flip à `1` si tu veux le mode wireless.
+
+> ⚠️ **Le mode BT exige la PSRAM activée.** Le stack Bluetooth (Bluedroid) a
+> besoin de ~50 KB de heap contigu pour `btc_spp_init`. Avec le sprite
+> d'animation (115 KB) qui sature le DRAM, l'allocation BT crashe en
+> `Guru Meditation Error: LoadProhibited` dans `tlsf_block_size_max` au boot
+> (symptôme : reboot loop "canary → rainbow → canary", `sprite: OK` mais pas de
+> chat). Sur la branche `feat/bt-serial`, `board_build.psram = enable` est déjà
+> décommenté dans `platformio.ini` (le sprite part en PSRAM, le DRAM reste libre
+> pour le BT). Conséquence : GPIO 16/17 = Port C réservés, la matrix C NeoPixel
+> est désactivée dans `leds.cpp`. Si tu actives le BT sur `main`, pense à
+> décommenter `board_build.psram = enable` toi-même.
+
+Re-flasher :
+
+```bash
+cd firmware
+pio run -t upload
+```
+
+L'upload se fait toujours par USB (le bootloader ESP32 reste sur USB serial,
+seul le firmware applicatif bascule en BT). Donc tu gardes le câble data branché
+pendant l'upload.
+
+##### Pairing Windows
+
+1. **Reset le M5Stack** (bouton rouge côté gauche) pour qu'il redémarre en BT.
+2. Sur Windows : `Paramètres` → `Bluetooth et appareils` → `Ajouter un appareil`
+   → `Bluetooth` → attends `M5Stack-Vibe` dans la liste → clique → `Se connecter`.
+   Pas de code de pairing demandé (mode "just works").
+3. Windows assigne 2 COM ports au device pairé (incoming + outgoing). **Note les deux**
+   dans `Get-PnpDevice -Class Ports`. Celui à utiliser est le **outgoing**, en général
+   le numéro le plus haut des deux.
+
+```powershell
+Get-PnpDevice -Class Ports -Status OK | Where-Object Name -like "*Standard Serial*" | Format-List Name
+# → "Standard Serial over Bluetooth link (COM11)"  → outgoing
+# → "Standard Serial over Bluetooth link (COM12)"  → incoming, ignorer
+```
+
+Astuce de test rapide pour savoir lequel : ouvre le COM le plus haut, attends
+6s, tu dois voir un `{"type":"ping"}` (le firmware envoie un ping toutes les 5s).
+Sinon essaie l'autre.
+
+##### Mettre à jour M5STACK_PORT
+
+```powershell
+[Environment]::SetEnvironmentVariable("M5STACK_PORT", "COM11", "User")
+# Ferme ce terminal et ouvre-en un nouveau pour que la var soit prise en compte
+```
+
+C'est tout. Lance `vibe-m5stack` dans un terminal neuf, le bridge se connecte
+au COM BT exactement comme avant.
+
+##### Repasser temporairement en USB (debug)
+
+Pour faire `pio device monitor` ou diagnostiquer un truc côté firmware :
+
+1. Édite `firmware/src/serial/serial_io.h` → `#define USE_BT_SERIAL 0`
+2. `pio run -t upload` (le binaire repasse en USB serial pur)
+3. `pio device monitor` fonctionne à nouveau
+
+Une fois le debug terminé, remet `USE_BT_SERIAL` à `1` et re-flash.
+
+##### Troubleshooting BT
+
+| Symptôme | Cause | Fix |
+|---|---|---|
+| `M5Stack-Vibe` n'apparaît pas dans la liste Bluetooth Windows | Firmware pas flashé en mode BT, ou BT pas init côté ESP32 | Vérifie que `USE_BT_SERIAL=1` dans `serial_io.h`, re-flash, et que `BluetoothSerial::begin("M5Stack-Vibe")` n'a pas échoué (vérifier en repassant temporairement en USB + monitor) |
+| Pairing OK mais `Get-PnpDevice` ne montre pas de Standard Serial over Bluetooth | Service SPP pas exposé par Windows | Va dans `Devices and Printers` → click droit sur `M5Stack-Vibe` → `Properties` → onglet `Services` → coche `Serial Port (SPP)` → `Apply` |
+| Pings reçus de manière intermittente | Distance >10 m, interférences 2.4 GHz (WiFi, micro-onde) | Rapproche le M5Stack du PC, ou change le canal WiFi 2.4 GHz |
+| `vibe-m5stack` ouvre le COM mais timeout au premier approval | Mauvais COM (tu as pris l'incoming au lieu de l'outgoing) | Essaie l'autre COM des deux assignés par Windows |
+| M5Stack reboot quand même au pairing initial | Normal — le pairing redémarre la pile BT côté ESP32 | Aucun fix, ça arrive 1× lors du premier pairing. Les sessions suivantes ne reboot pas. |
+
 ### 2. Installer le plugin Python
 
 `mistral-vibe` est installé via `uv tool install mistral-vibe`, ce qui crée un venv
 isolé dans `~\AppData\Roaming\uv\tools\mistral-vibe\`. Le plugin `appro-vibe` doit
 être injecté **dans ce même venv**, sinon l'import `vibe` échoue à l'exécution.
 
+Depuis la racine du repo (le `.` final compte) :
+
 ```bash
-# Depuis la racine du repo (adapte le chemin absolu à ton clone)
-uv tool install --reinstall mistral-vibe --with-editable .
+uv tool install --reinstall mistral-vibe --with-editable . --with-executables-from appro-vibe
 ```
 
 Cela :
 1. Reconstruit le venv `mistral-vibe`.
 2. Y installe `appro-vibe` en editable + dépendances (`pyserial`, `mcp`, `aiohttp`, `filelock`).
-3. Dépose `vibe-m5stack` (et `vibe`, `vibe-acp`) dans `~\.local\bin\`, qui est déjà
-   sur le PATH dès que `vibe` fonctionne — **rien à modifier côté PATH**.
+3. Expose les entrypoints **des deux packages** dans `~\.local\bin\` :
+   `vibe`, `vibe-acp` (de mistral-vibe) + `vibe-m5stack`, `m5stack-mcp-server` (de appro-vibe).
 
-Vérifie :
+> ⚠️ **`--with-executables-from appro-vibe` est obligatoire.** Sans cette flag,
+> `uv tool install` n'expose que les entrypoints du tool principal (`mistral-vibe`).
+> `vibe-m5stack.exe` est bien créé dans le venv (`~\AppData\Roaming\uv\tools\mistral-vibe\Scripts\`)
+> mais n'apparaît jamais sur le PATH, et la commande `vibe-m5stack` reste introuvable.
+> C'est le piège n°1 de l'install — la version "naïve" `uv tool install --reinstall mistral-vibe --with-editable .` semble réussir sans erreur mais laisse `vibe-m5stack` invisible.
+
+#### 2.a. Vérifier l'install (à faire systématiquement)
+
 ```powershell
-Get-Command vibe-m5stack    # doit pointer sur ~\.local\bin\vibe-m5stack.exe
+# Doit retourner C:\Users\<toi>\.local\bin\vibe-m5stack.exe
+Get-Command vibe-m5stack | Select-Object Source
+
+# Doit lister vibe.exe, vibe-acp.exe, vibe-m5stack.exe, m5stack-mcp-server.exe
+Get-ChildItem $env:USERPROFILE\.local\bin -Filter "vibe*","m5stack*"
 ```
+
+Si `Get-Command vibe-m5stack` ne retourne rien, l'install a échoué silencieusement.
+Causes typiques :
+- Tu as oublié `--with-executables-from appro-vibe` (cas n°1, voir encadré ci-dessus).
+- Un `vibe-m5stack` tourne déjà et verrouille `vibe-m5stack.exe` → ferme le terminal
+  qui héberge la session, ou `Stop-Process -Name vibe-m5stack`, puis relance la commande.
+- Tu n'as pas lancé depuis la racine du repo (le `.` pointe sur le mauvais dossier).
+- Le repo est dans OneDrive/Dropbox/iCloud (voir [Limites connues](#limites-connues)).
 
 > ⚠️ **Ne pas faire `pip install -e .`** : ce `pip` est celui de ton Python système
 > ou user, pas celui du venv `mistral-vibe`. Le binaire `vibe-m5stack` n'atterrit
@@ -167,8 +298,8 @@ Get-Command vibe-m5stack    # doit pointer sur ~\.local\bin\vibe-m5stack.exe
 >
 > Cas particulier : `pip install -e .` *fonctionne* si tu actives manuellement le
 > venv `mistral-vibe` (`. ~\AppData\Roaming\uv\tools\mistral-vibe\Scripts\Activate.ps1`)
-> avant. La commande `uv tool install --with-editable` ci-dessus fait ça
-> proprement pour toi.
+> avant. La commande `uv tool install --with-editable --with-executables-from` ci-dessus
+> fait ça proprement pour toi.
 
 ### 2bis. Variables d'environnement obligatoires
 
@@ -349,6 +480,13 @@ l'implémenter, voir section précédente.
 
 ## Limites connues
 
+- **`POWERON_RESET` du M5Stack à chaque ouverture du port serial sur certains PCs**
+(constaté sur Lenovo ThinkPad avec chipset Intel USB 3.1). La pile USB Windows
+cycle VBUS au moment de l'open → M5Stack reboot → approval JSON perdu pendant
+le boot → timeout 35s. Aucun fix côté software possible (DTR/RTS désassertés
+n'empêchent pas le reset). Solution durable : **passer en mode Bluetooth Classic
+SPP**, voir [§1.h](#1h-mode-wireless-bluetooth-classic-spp). Le M5Stack devient
+wireless, plus aucun reset, et `bridge.py` reste inchangé.
 - **Auto-détect port serial bugué** : probe timeout 1s alors que le firmware ping
 toutes les 5s → ~80% de chance de rater. **Set `M5STACK_PORT` explicitement**
 (voir 2bis). Fix futur : passer probe à 6s ou ping actif côté PC.

@@ -47,7 +47,9 @@ static void clear(CRGB* buf, int count) {
 void begin() {
     FastLED.addLeds<WS2812B, RING_PIN,     GRB>(ring,    RING_LEDS);
     FastLED.addLeds<WS2812B, MATRIX_B_PIN, GRB>(matrixB, MATRIX_LEDS);
-    FastLED.addLeds<WS2812B, MATRIX_C_PIN, GRB>(matrixC, MATRIX_LEDS);
+    // Port C (GPIO 17) réservé par la PSRAM. Si tu désactives la PSRAM dans
+    // platformio.ini, tu peux ré-activer cette ligne.
+    // FastLED.addLeds<WS2812B, MATRIX_C_PIN, GRB>(matrixC, MATRIX_LEDS);
 
     // Cap total LED current at ~400 mA so the USB rail can also feed the
     // ESP32, the LCD backlight and the vibration motor without browning out.
