@@ -6,6 +6,8 @@ critique), un écran s'allume sur le M5Stack avec un chat Mistral qui danse et t
 valides au bouton. LEDs latérales + matrices NeoPixel optionnelles aux ports B/C
 pour signaler l'attente.
 
+> 📝 **Article complet** : [Un bouton physique pour valider les actions des agents IA](https://www.romaindelfosse.fr/blog/m5stack-vibe-bouton-physique-agents-ia/) — contexte, démo et retour d'expérience.
+
 ```
 PC (vibe-m5stack)  ──hook Python──>  plugin/vibe_m5stack_hook.py
                                               │
