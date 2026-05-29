@@ -53,7 +53,10 @@ class M5StackBridge:
         self.response_queue = Queue()
         self.running = False
         self.reader_thread: Optional[threading.Thread] = None
-        
+        # Serialize writes: the broker heartbeat thread and the approval path
+        # both call send() on the same persistent connection.
+        self._write_lock = threading.Lock()
+
         if auto_connect:
             self.connect()
     
@@ -187,6 +190,12 @@ class M5StackBridge:
                         if line:
                             try:
                                 msg = json.loads(line)
+                                # Drop pings: with a persistent connection nobody
+                                # consumes the queue between approvals, so pings
+                                # (every 5s) would grow it unbounded. The PC has no
+                                # use for them.
+                                if isinstance(msg, dict) and msg.get("type") == "ping":
+                                    continue
                                 self.message_queue.put(msg)
                             except json.JSONDecodeError:
                                 # Not valid JSON, might be partial
@@ -212,8 +221,9 @@ class M5StackBridge:
         
         try:
             json_str = json.dumps(message)
-            self.serial_conn.write(json_str.encode('utf-8') + b'\n')
-            self.serial_conn.flush()
+            with self._write_lock:
+                self.serial_conn.write(json_str.encode('utf-8') + b'\n')
+                self.serial_conn.flush()
             return True
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
@@ -313,6 +323,60 @@ class M5StackBridge:
         message = {
             "type": "credit_info",
             "percent": max(0, min(100, percent))
+        }
+        return self.send(message)
+    
+    def request_approval_persistent(
+        self, title: str, body: str, request_id: int | None = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Send an approval request over the ALREADY-OPEN persistent connection and
+        wait for the matching response from the reader thread's queue.
+
+        Used by the owner-broker (which holds the port persistently for status +
+        heartbeat). Unlike request_approval(), it does NOT open a new serial port
+        (that would fail: the port is exclusive and already held by this owner).
+
+        Returns the response dict or None on timeout/error.
+        """
+        if self.serial_conn is None or not self.serial_conn.is_open:
+            logger.warning("request_approval_persistent: no open connection")
+            return None
+
+        if request_id is None:
+            request_id = int(time.monotonic() * 1000) % 1_000_000
+
+        message = {"type": "approval", "id": request_id, "title": title, "body": body}
+        if not self.send(message):
+            return None
+
+        deadline = time.monotonic() + 35.0
+        while time.monotonic() < deadline:
+            msg = self.receive(timeout=0.2)
+            if msg is None:
+                continue
+            if msg.get("type") == "response" and msg.get("id") == request_id:
+                return msg
+        logger.warning(f"Persistent approval request {request_id} timed out")
+        return None
+
+    def send_status(self, state: str, detail: str = "", seq: int = 0) -> bool:
+        """
+        Send agent status to M5Stack (also serves as heartbeat).
+        
+        Args:
+            state: One of "thinking", "waiting", "done", "error"
+            detail: Short detail text (max 40 chars)
+            seq: Monotonically increasing sequence number
+        
+        Returns:
+            True if message was sent successfully
+        """
+        message = {
+            "type": "status",
+            "state": state,
+            "detail": detail[:40],  # Truncate to 40 chars
+            "seq": seq
         }
         return self.send(message)
     

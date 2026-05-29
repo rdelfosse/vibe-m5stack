@@ -44,9 +44,151 @@ from plugin.m5stack_utils import SessionManager
 from vibe.core.types import ApprovalResponse
 from vibe.core.tools.permissions import RequiredPermission
 
+from vibe.core.types import (
+    UserMessageEvent,
+    AssistantEvent,
+    ReasoningEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+    ToolStreamEvent,
+    WaitingForInputEvent,
+    CompactStartEvent,
+    CompactEndEvent,
+    PlanReviewRequestedEvent,
+    SessionTitleUpdatedEvent,
+)
+
+# Global state tracking for status
+_status_seq = 0
+_last_status_state = "done"
+_last_status_detail = ""
+
 # Session manager singleton for multi-session support
 _session_mgr = SessionManager()
 
+
+
+
+def map_event_to_status(event) -> tuple:
+    """Map Vibe events to agent states."""
+    global _status_seq
+    
+    state = "thinking"
+    detail = ""
+    seq_increment = False
+    
+    event_type = type(event).__name__
+    
+    if event_type in ("ToolCallEvent", "AssistantEvent", "ReasoningEvent", "ToolStreamEvent"):
+        state = "thinking"
+        # Only ToolCallEvent carries a tool_name. For the others, leave detail
+        # empty — never fall back to str(event), which is the Python object repr
+        # and would be shown verbatim on the device screen.
+        tool_name = getattr(event, "tool_name", None)
+        detail = str(tool_name)[:40] if tool_name else ""
+        seq_increment = True
+    elif event_type == "WaitingForInputEvent":
+        state = "waiting"
+        detail = "awaiting input"
+    elif event_type == "CompactStartEvent":
+        state = "thinking"
+        detail = "compacting"
+        seq_increment = True
+    elif event_type in ("CompactEndEvent", "SessionTitleUpdatedEvent", "PlanReviewRequestedEvent"):
+        state = "thinking"
+        seq_increment = True
+    
+    if seq_increment:
+        _status_seq += 1
+    
+    return state, detail, _status_seq
+
+
+# Owner-broker manager (lazily initialized on first use).
+_broker_mgr: Any = None
+_broker_init_attempted = False
+
+
+def get_or_init_broker():
+    """Lazily build and initialize the owner-broker manager.
+
+    On first call: opens the M5Stack port (owner) or connects to an existing
+    owner's socket (client). Returns the BrokerManager, or None if init failed
+    (in which case the approval path falls back to the ephemeral bridge).
+    """
+    global _broker_mgr, _broker_init_attempted
+    if _broker_mgr is not None:
+        return _broker_mgr
+    if _broker_init_attempted:
+        return None  # already failed once; don't retry on every event
+    _broker_init_attempted = True
+    try:
+        import atexit
+        from plugin.broker import BrokerManager
+
+        port = os.environ.get("M5STACK_PORT")
+        raw_bridge = M5StackBridge(port=port, auto_connect=False)
+        session = _session_mgr.session_name or "default"
+        mgr = BrokerManager(raw_bridge, session)
+        mgr.initialize()
+        _broker_mgr = mgr
+        atexit.register(_safe_close_broker)
+        logger.info(f"Broker initialized: role={mgr.role}")
+        return _broker_mgr
+    except Exception as e:
+        logger.error(f"Broker init failed: {e}")
+        return None
+
+
+def _safe_close_broker():
+    try:
+        if _broker_mgr is not None:
+            _broker_mgr.close()
+    except Exception:
+        pass
+
+
+def _broker_can_approve(mgr) -> bool:
+    """True if the broker can actually reach the device for an approval."""
+    if mgr is None or mgr.role is None:
+        return False
+    if mgr.is_owner():
+        conn = getattr(mgr.bridge, "serial_conn", None)
+        return conn is not None and conn.is_open
+    if mgr.is_client():
+        return mgr.client is not None and mgr.client.owner_port is not None
+    return False
+
+
+_last_push_state = None
+_last_push_monotonic = 0.0
+_PUSH_THROTTLE_S = 0.25  # min interval between same-state pushes
+
+
+def push_status_to_device(state: str, detail: str = "", seq: int = 0) -> bool:
+    """Push agent status to the M5Stack via the owner-broker (best-effort).
+
+    Streaming events (assistant/tool chunks) can fire hundreds of times per turn;
+    we throttle same-state pushes so we don't saturate the (BT) serial link.
+    State transitions always go through immediately.
+    """
+    global _last_push_state, _last_push_monotonic
+    import time
+
+    now = time.monotonic()
+    if state == _last_push_state and (now - _last_push_monotonic) < _PUSH_THROTTLE_S:
+        return True
+    _last_push_state = state
+    _last_push_monotonic = now
+
+    mgr = get_or_init_broker()
+    if mgr is None:
+        return False
+    try:
+        return mgr.push_status(state, detail, seq)
+    except Exception as e:
+        logger.error(f"Failed to push status: {e}")
+        return False
 
 class ThreadSafeM5StackBridge:
     """Thread-safe wrapper around M5StackBridge for async/sync boundary."""
@@ -163,40 +305,47 @@ async def m5stack_approval_callback(
         - NO: operation rejected
     """
     global _bridge
-    
-    # Lazy initialization - try to connect on first use
-    if _bridge is None:
-        try:
-            # Use M5STACK_PORT env var if set
-            port = os.environ.get("M5STACK_PORT")
-            # auto_connect=False: use ephemeral connections with file locking
-            raw_bridge = M5StackBridge(port=port, auto_connect=False)
-            _bridge = ThreadSafeM5StackBridge(raw_bridge)
-            # Check if port is detectable (not if connection is open)
-            if raw_bridge.is_connected:
-                logger.info(f"M5Stack port detected: {raw_bridge.port}")
-            else:
-                logger.error("M5Stack auto-detect failed. Set M5STACK_PORT=COMx explicitly.")
-        except Exception as e:
-            logger.error(f"Failed to initialize M5Stack bridge: {e}")
-            return (ApprovalResponse.NO, "M5Stack unavailable")
-    
-    # Short-circuit: if not connected, return immediately so the race lets the
-    # Textual modal win and the user falls back to it.
-    if not _bridge.is_connected():
-        return (ApprovalResponse.NO, "M5Stack unavailable")
-    
-    bridge = _bridge
-    
+
     title, body = format_tool_info(tool_name, args)
     # Prefix title with session name for multi-session identification
     title = _session_mgr.format_title(title)
     title = title[:40]  # safe truncate pour M5Stack
     logger.info(f"Permission requested: {title}")
 
-    # Request approval from M5Stack
-    response = await bridge.request_approval(title, body)
-    
+    # Preferred path: route through the owner-broker so status + approval share
+    # the single persistent connection (and multi-session works).
+    mgr = get_or_init_broker()
+    if _broker_can_approve(mgr):
+        try:
+            if mgr.is_owner():
+                # broker.request_approval is blocking (serial) -> off the event loop
+                response = await asyncio.to_thread(
+                    mgr.broker.request_approval, title, body, None
+                )
+            else:
+                req_id = int(asyncio.get_event_loop().time() * 1000) % 1_000_000
+                response = await mgr.client.request_approval(title, body, req_id)
+        except Exception as e:
+            logger.error(f"Broker approval error: {e}")
+            response = None
+    else:
+        # Fallback: ephemeral bridge (no broker / device unreachable via broker).
+        if _bridge is None:
+            try:
+                port = os.environ.get("M5STACK_PORT")
+                raw_bridge = M5StackBridge(port=port, auto_connect=False)
+                _bridge = ThreadSafeM5StackBridge(raw_bridge)
+                if raw_bridge.is_connected:
+                    logger.info(f"M5Stack port detected (fallback): {raw_bridge.port}")
+                else:
+                    logger.error("M5Stack auto-detect failed. Set M5STACK_PORT=COMx explicitly.")
+            except Exception as e:
+                logger.error(f"Failed to initialize M5Stack bridge: {e}")
+                return (ApprovalResponse.NO, "M5Stack unavailable")
+        if not _bridge.is_connected():
+            return (ApprovalResponse.NO, "M5Stack unavailable")
+        response = await _bridge.request_approval(title, body)
+
     if response is None:
         logger.warning("M5Stack approval timeout or error - denying")
         return (ApprovalResponse.NO, "Approval timeout - operation blocked")
@@ -221,6 +370,39 @@ async def m5stack_approval_callback(
 
 _original_set_approval_callback: Any = None
 _patched_agent_loop = False
+
+
+
+
+def patch_act_for_status():
+    """Patch AgentLoop.act to observe events and push status."""
+    from vibe.core.agent_loop import AgentLoop
+    
+    _orig_act = AgentLoop.act
+    
+    async def patched_act(self, msg, *args, **kwargs):
+        """Wrapped act that observes events and pushes status."""
+        global _status_seq
+        
+        # Push thinking state at start of turn
+        push_status_to_device("thinking", "", 0)
+        _status_seq = 0  # Reset seq for new turn
+        
+        try:
+            async for ev in _orig_act(self, msg, *args, **kwargs):
+                # Map event to status and push
+                state, detail, seq = map_event_to_status(ev)
+                push_status_to_device(state, detail, seq)
+                yield ev
+            
+            # Push done state at end of turn
+            push_status_to_device("done", "", _status_seq + 1)
+        except Exception as e:
+            push_status_to_device("error", str(e)[:40], _status_seq + 1)
+            raise
+    
+    AgentLoop.act = patched_act
+    logger.info("AgentLoop.act patched for status tracking")
 
 
 def patch_agent_loop():
@@ -306,6 +488,9 @@ def install_hook():
     
     # Patch AgentLoop - this wraps all future set_approval_callback calls
     patch_agent_loop()
+    
+    # Patch AgentLoop.act for status tracking
+    patch_act_for_status()
     
     logger.info("Hook installation complete")
 

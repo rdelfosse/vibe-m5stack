@@ -2,6 +2,16 @@
 #include <cstdint>
 #include <ArduinoJson.h>
 
+// Agent states (for STATUS messages)
+enum class AgentState {
+    THINKING,      // Agent is generating/executing
+    WAITING,       // Waiting for user input/approval
+    DONE,          // Agent finished its turn
+    ERROR,         // Exception occurred
+    DEAD,          // Agent dead (watchdog timeout)
+    STUCK          // Agent stuck (generating forever)
+};
+
 // Message types
 enum class MessageType {
     INVALID,
@@ -9,8 +19,14 @@ enum class MessageType {
     APPROVAL_RESPONSE, // M5Stack -> PC: User response
     PING,              // Keepalive
     ACK,               // Acknowledgement
-    CREDIT_INFO        // PC -> M5Stack: Credit usage percentage (0-100)
+    CREDIT_INFO,       // PC -> M5Stack: Credit usage percentage (0-100)
+    STATUS            // PC -> M5Stack: Agent state + heartbeat
 };
+
+// Watchdog constants (milliseconds)
+#define WATCHDOG_DEAD_MS   12000   // No message received -> DEAD
+#define WATCHDOG_STUCK_MS  90000   // No seq progression in THINKING -> STUCK
+#define HEARTBEAT_MS       3000    // PC heartbeat interval
 
 // Approval response values
 enum class ApprovalResponse {
@@ -56,6 +72,12 @@ public:
     uint8_t getCreditPercent() const;
     bool hasCreditInfo() const;
     
+    // Get status info
+    AgentState getAgentState() const;
+    const char* getStatusDetail() const;
+    uint32_t getStatusSeq() const;
+    bool hasStatus() const;
+    
 private:
     StaticJsonDocument<JSON_RX_SIZE> rxDoc;
     StaticJsonDocument<JSON_TX_SIZE> txDoc;
@@ -67,4 +89,10 @@ private:
     uint8_t lastCreditPercent;
     bool creditInfoValid;
     bool newMessageAvailable;
+    
+    // Status fields
+    AgentState lastAgentState;
+    char lastStatusDetail[41];  // max 40 chars + null terminator
+    uint32_t lastStatusSeq;
+    bool statusValid;
 };

@@ -1,0 +1,182 @@
+"""
+Tests for status tracking functionality.
+"""
+
+import asyncio
+import pytest
+from unittest.mock import MagicMock, patch, AsyncMock
+from typing import Any
+
+# Mock vibe core modules before importing
+import sys
+
+mock_vibe_core = MagicMock()
+mock_vibe_core.agent_loop = MagicMock()
+mock_vibe_core.types = MagicMock()
+mock_vibe_core.tools = MagicMock()
+mock_vibe_core.tools.permissions = MagicMock()
+
+# Define mock event classes
+class MockEvent:
+    pass
+
+class UserMessageEvent(MockEvent):
+    pass
+
+class AssistantEvent(MockEvent):
+    def __init__(self, tool_name=""):
+        self.tool_name = tool_name
+
+class ReasoningEvent(MockEvent):
+    pass
+
+class ToolCallEvent(MockEvent):
+    def __init__(self, tool_name=""):
+        self.tool_name = tool_name
+
+class ToolResultEvent(MockEvent):
+    pass
+
+class ToolStreamEvent(MockEvent):
+    pass
+
+class WaitingForInputEvent(MockEvent):
+    pass
+
+class CompactStartEvent(MockEvent):
+    pass
+
+class CompactEndEvent(MockEvent):
+    pass
+
+class PlanReviewRequestedEvent(MockEvent):
+    pass
+
+class SessionTitleUpdatedEvent(MockEvent):
+    pass
+
+# Set up mocks
+mock_vibe_core.types.UserMessageEvent = UserMessageEvent
+mock_vibe_core.types.AssistantEvent = AssistantEvent
+mock_vibe_core.types.ReasoningEvent = ReasoningEvent
+mock_vibe_core.types.ToolCallEvent = ToolCallEvent
+mock_vibe_core.types.ToolResultEvent = ToolResultEvent
+mock_vibe_core.types.ToolStreamEvent = ToolStreamEvent
+mock_vibe_core.types.WaitingForInputEvent = WaitingForInputEvent
+mock_vibe_core.types.CompactStartEvent = CompactStartEvent
+mock_vibe_core.types.CompactEndEvent = CompactEndEvent
+mock_vibe_core.types.PlanReviewRequestedEvent = PlanReviewRequestedEvent
+mock_vibe_core.types.SessionTitleUpdatedEvent = SessionTitleUpdatedEvent
+
+sys.modules['vibe.core'] = mock_vibe_core
+sys.modules['vibe.core.agent_loop'] = mock_vibe_core.agent_loop
+sys.modules['vibe.core.types'] = mock_vibe_core.types
+sys.modules['vibe.core.tools'] = mock_vibe_core.tools
+sys.modules['vibe.core.tools.permissions'] = mock_vibe_core.tools.permissions
+
+# Now we can import the hook module
+from plugin.vibe_m5stack_hook import map_event_to_status
+
+
+class TestMapEventToStatus:
+    """Tests for map_event_to_status function."""
+    
+    def setup_method(self):
+        """Reset global seq counter before each test."""
+        import plugin.vibe_m5stack_hook as hook_module
+        hook_module._status_seq = 0
+    
+    def test_tool_call_event_maps_to_thinking(self):
+        event = ToolCallEvent(tool_name="write_file")
+        state, detail, seq = map_event_to_status(event)
+        assert state == "thinking"
+        assert detail == "write_file"
+        assert seq == 1
+    
+    def test_assistant_event_maps_to_thinking(self):
+        event = AssistantEvent()
+        state, detail, seq = map_event_to_status(event)
+        assert state == "thinking"
+        assert detail == ""
+        assert seq == 1
+    
+    def test_reasoning_event_maps_to_thinking(self):
+        event = ReasoningEvent()
+        state, detail, seq = map_event_to_status(event)
+        assert state == "thinking"
+        assert detail == ""
+        assert seq == 1
+    
+    def test_waiting_for_input_event_maps_to_waiting(self):
+        event = WaitingForInputEvent()
+        state, detail, seq = map_event_to_status(event)
+        assert state == "waiting"
+        assert detail == "awaiting input"
+        assert seq == 0  # No seq increment
+    
+    def test_compact_start_event_maps_to_thinking(self):
+        event = CompactStartEvent()
+        state, detail, seq = map_event_to_status(event)
+        assert state == "thinking"
+        assert detail == "compacting"
+        assert seq == 1
+    
+    def test_unknown_event_maps_to_thinking(self):
+        event = UserMessageEvent()
+        state, detail, seq = map_event_to_status(event)
+        assert state == "thinking"
+        assert seq == 0
+
+
+class TestStatusSequence:
+    """Tests for sequence number incrementing."""
+    
+    def setup_method(self):
+        import plugin.vibe_m5stack_hook as hook_module
+        hook_module._status_seq = 0
+    
+    def test_seq_increments_on_multiple_events(self):
+        events = [
+            ToolCallEvent("write_file"),
+            ToolCallEvent("read_file"),
+            AssistantEvent(),
+        ]
+        seqs = []
+        for event in events:
+            _, _, seq = map_event_to_status(event)
+            seqs.append(seq)
+        assert seqs == [1, 2, 3]
+    
+    def test_waiting_event_does_not_increment_seq(self):
+        events = [
+            ToolCallEvent("write_file"),
+            WaitingForInputEvent(),
+            ToolCallEvent("read_file"),
+        ]
+        seqs = []
+        for event in events:
+            _, _, seq = map_event_to_status(event)
+            seqs.append(seq)
+        assert seqs == [1, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_act_patch():
+    """Test that AgentLoop.act is properly patched."""
+    from unittest.mock import patch
+    
+    # Import after async context
+    from plugin.vibe_m5stack_hook import patch_act_for_status
+    from vibe.core.agent_loop import AgentLoop
+    
+    # Save original
+    original_act = AgentLoop.act
+    
+    # Patch
+    patch_act_for_status()
+    
+    # Verify it was patched
+    assert AgentLoop.act != original_act
+    
+    # Restore
+    AgentLoop.act = original_act

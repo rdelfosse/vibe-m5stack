@@ -7,9 +7,13 @@ SerialProtocol::SerialProtocol()
       lastRequestId(0),
       lastCreditPercent(0),
       creditInfoValid(false),
-      newMessageAvailable(false) {
+      newMessageAvailable(false),
+      lastAgentState(AgentState::DONE),
+      lastStatusSeq(0),
+      statusValid(false) {
     lastTitle[0] = '\0';
     lastBody[0] = '\0';
+    lastStatusDetail[0] = '\0';
 }
 
 void SerialProtocol::begin(uint32_t baud) {
@@ -58,6 +62,37 @@ bool SerialProtocol::receive() {
         // Clamp to 0-100
         if (lastCreditPercent > 100) lastCreditPercent = 100;
         creditInfoValid = true;
+        return true;
+    }
+    else if (strcmp(typeStr, "status") == 0) {
+        lastMessageType = MessageType::STATUS;
+        
+        // Parse state
+        const char* stateStr = rxDoc["state"];
+        if (strcmp(stateStr, "thinking") == 0) {
+            lastAgentState = AgentState::THINKING;
+        } else if (strcmp(stateStr, "waiting") == 0) {
+            lastAgentState = AgentState::WAITING;
+        } else if (strcmp(stateStr, "done") == 0) {
+            lastAgentState = AgentState::DONE;
+        } else if (strcmp(stateStr, "error") == 0) {
+            lastAgentState = AgentState::ERROR;
+        } else if (strcmp(stateStr, "dead") == 0) {
+            lastAgentState = AgentState::DEAD;
+        } else if (strcmp(stateStr, "stuck") == 0) {
+            lastAgentState = AgentState::STUCK;
+        } else {
+            lastAgentState = AgentState::DONE;
+        }
+        
+        // Parse detail (optional, max 40 chars)
+        const char* detail = rxDoc["detail"] | "";
+        strlcpy(lastStatusDetail, detail, sizeof(lastStatusDetail));
+        
+        // Parse seq
+        lastStatusSeq = rxDoc["seq"] | 0;
+        statusValid = true;
+        
         return true;
     }
     
@@ -121,4 +156,20 @@ uint8_t SerialProtocol::getCreditPercent() const {
 
 bool SerialProtocol::hasCreditInfo() const {
     return creditInfoValid;
+}
+
+AgentState SerialProtocol::getAgentState() const {
+    return lastAgentState;
+}
+
+const char* SerialProtocol::getStatusDetail() const {
+    return lastStatusDetail;
+}
+
+uint32_t SerialProtocol::getStatusSeq() const {
+    return lastStatusSeq;
+}
+
+bool SerialProtocol::hasStatus() const {
+    return statusValid;
 }

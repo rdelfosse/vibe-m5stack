@@ -407,34 +407,96 @@ de signification fonctionnelle, juste un easter egg.
 
 ---
 
+## Statut ambiant + Watchdog (feature A+B)
+
+**Problème résolu** : Avec Vibe, on ne sait jamais si l'agent est en train de travailler,
+en attente d'une approbation, ou crashé. Le terminal ne donne pas d'indication visuelle
+claire, et quand on quitte l'écran, on ne sait pas si l'agent a besoin de nous.
+
+**Solution** : Le M5Stack affiche en continu l'état de l'agent via écran + LEDs, et un
+watchdog détecte les agents morts ou figés.
+
+### États affichés
+
+| État | Écran | LEDs | Signification |
+|---|---|---|---|
+| **THINKING** | Chat Mistral qui danse | Chase lent orange (palette Mistral) | Agent génère/exécute |
+| **WAITING** | Bandeau ambre + chat | Pulse ambre | Approval en attente ou `WaitingForInputEvent` |
+| **DONE/IDLE** | Chat + bandeau "Ready" | Vert fixe (après flourish vert vif ~1.5s) | Agent a fini, prêt pour nouvelle instruction |
+| **ERROR/DEAD** | Bandeau rouge "Agent DEAD!" | Rouge clignotant + buzz | Exception ou watchdog déclenché (PC déconnecté) |
+| **STUCK** | Bandeau rouge "Agent STUCK!" | Rouge clignotant + buzz | Agent figé (generating forever) |
+
+### Watchdog
+
+Le firmware détecte automatiquement deux cas d'erreur côté device :
+
+- **DEAD** : plus aucun message reçu du PC depuis 12 secondes
+- **STUCK** : état THINKING maintenu sans progression (seq inchangé) depuis 90 secondes
+
+Le buzz + rouge clignotant = signal physique fort perceptible même en étant parti du bureau.
+
+### Architecture multi-session (owner-broker)
+
+Pour permettre la connexion persistante (nécessaire pour le status continu et le heartbeat)
+tout en conservant le multi-session, une architecture **owner-broker** est implémentée :
+
+- **OWNER** : Une session acquiert un lock (`~/.vibe/m5stack.owner.lock`) et devient owner.
+  Elle ouvre la connexion serial persistante, lance un serveur socket localhost, et
+  agrège les états de toutes les sessions.
+- **CLIENT** : Les autres sessions se connectent au socket de l'owner et envoient leurs
+  status/approval par ce canal.
+- **Ré-élection** : Si l'owner meurt, un client devient automatiquement le nouvel owner.
+
+Priorité d'affichage : WAITING > THINKING > DONE (le device montre l'état le plus urgent).
+
+Variable d'environnement : `M5STACK_OWNER=0` pour forcer le mode client.
+
+### Protocole étendu
+
+Nouveau message PC → device :
+```json
+{"type":"status","state":"thinking","detail":"edit src/foo.py","seq":42}
+```
+
+- `state` : "thinking" | "waiting" | "done" | "error"
+- `detail` : texte court (≤ 40 chars)
+- `seq` : compteur monotone (pour le watchdog STUCK)
+- **Cadence** : envoyé à chaque événement + heartbeat toutes les 3 secondes
+
+Le broker agrège les status de toutes les sessions et envoie l'état prioritaire au device.
+
+---
+
 ## Architecture
 
 ```
 firmware/                          Arduino/PlatformIO, board m5stack-fire
 ├── platformio.ini                 M5Stack + ArduinoJson + FastLED
 └── src/
-    ├── main.cpp                   State machine: IDLE (anim) ↔ SHOWING_REQUEST
+    ├── main.cpp                   State machine: IDLE ↔ SHOWING_REQUEST ↔ THINKING/WAITING/DONE/ERROR/DEAD/STUCK
     ├── display/
     │   ├── anim.h                 ChatAnimator wrapper
     │   ├── gif_animator.{h,cpp}   pushImage direct + recomposition rainbow par bande
     │   ├── gif_frames.h           27 frames 240×240 RGB565 (≈3 MB en flash)
     │   ├── mistral_logo.h         10 rects du logo "M" Mistral
-    │   ├── screen.{h,cpp}         ApprovalScreen (rendu titre/body/boutons)
-    │   └── ...
+    │   └── screen.{h,cpp}         ApprovalScreen + bandeaux d'état (status banners)
     ├── inputs/
     │   ├── buttons.{h,cpp}        Wrapper boutons + vibration
     │   ├── imu.{h,cpp}            IMU MPU6886 pour la détection de mouvement (shake)
-    │   └── leds.{h,cpp}           FastLED — ring 10 + matrix B + matrix C
+    │   └── leds.{h,cpp}           FastLED — ring 10 + matrix B + matrix C, setAgentState()
     └── serial/
-        └── protocol.{h,cpp}       JSON in/out, filtrage ping/response par id
+        └── protocol.{h,cpp}       JSON in/out + MessageType::STATUS (state, detail, seq)
 
 plugin/                            Python — pont serial ↔ Vibe
 ├── __main__.py                   Entrypoint console (`vibe-m5stack`)
 ├── bridge.py                      M5StackBridge: auto-detect port, thread reader, mode éphémère + lock file
+├── broker.py                      OwnerBroker: serveur socket, agrégation état multi-session, ré-élection
 ├── m5stack_utils.py               SessionManager pour multi-session
-├── vibe_m5stack_hook.py           Hook approval (monkey-patch AgentLoop.set_approval_callback)
+├── vibe_m5stack_hook.py           Hook approval + status tracking (monkey-patch AgentLoop)
 ├── vibe_hook.py                   legacy console fallback (avant MCP)
 ├── mcp_server.py                  Server MCP stdio asyncio — optionnel, désactivé par défaut
+├── test_broker.py                 Tests unitaires pour broker
+├── test_status.py                Tests unitaires pour status tracking
 └── requirements.txt
 ```
 
@@ -444,6 +506,7 @@ PC → M5Stack (1 ligne JSON terminée `\n`) :
 ```json
 {"type":"approval","id":12345,"title":"Commit","body":"..."}
 {"type":"credit_info","percent":45}
+{"type":"status","state":"thinking","detail":"edit foo.py","seq":42}
 ```
 
 M5Stack → PC :
@@ -452,6 +515,12 @@ M5Stack → PC :
 {"type":"response","id":12345,"approved":false,"cancelled":true}
 {"type":"ping"}    // toutes les 5s en IDLE
 ```
+
+**Nouveau message `status`** (feature A+B) :
+- `state` : "thinking" | "waiting" | "done" | "error"
+- `detail` : texte court (≤ 40 chars)
+- `seq` : compteur monotone croissant (anti-faux-positif watchdog)
+- **Fréquence** : à chaque événement + heartbeat toutes les 3s
 
 Le bridge Python **filtre** les pings et **matche par id** la réponse (pour ne pas
 prendre un ping pour une approbation). Mode éphémère : ouvre/ferme le port à
