@@ -93,7 +93,7 @@ _session_mgr = SessionManager()
 
 def map_event_to_status(event) -> tuple:
     """Map Vibe events to agent states and activities."""
-    global _status_seq
+    global _status_seq, _last_status_activity
     
     state = "thinking"
     detail = ""

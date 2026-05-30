@@ -247,12 +247,46 @@ class OwnerBroker:
             logger.debug(f"Status from {session}: {state} (seq={seq})")
         
         elif msg_type == 'approval':
-            # Forward to device
-            self.bridge.send(msg)
+            # Forward to device and return response to client
+            request_id = msg.get('id')
+            title = msg.get('title', '')
+            body = msg.get('body', '')
+            
+            # Run in thread to avoid blocking the client handler
+            def handle_client_approval():
+                try:
+                    response = self.bridge.request_approval_persistent(title, body, request_id)
+                    if response:
+                        response['session'] = session
+                        # Send response back to client
+                        try:
+                            import asyncio
+                            loop = self.server._loop if hasattr(self.server, '_loop') else None
+                            if loop and not loop.is_closed():
+                                asyncio.run_coroutine_threadsafe(
+                                    self._send_to_client(writer, response),
+                                    loop
+                                )
+                        except Exception as e:
+                            logger.error(f"Failed to send approval response to client: {e}")
+                except Exception as e:
+                    logger.error(f"Error handling client approval: {e}")
+            
+            threading.Thread(target=handle_client_approval, daemon=True).start()
             logger.debug(f"Approval from {session} forwarded to device")
         
         else:
             logger.warning(f"Unknown message type from client: {msg_type}")
+    
+    async def _send_to_client(self, writer: asyncio.StreamWriter, msg: Dict[str, Any]):
+        """Send a message to a connected client."""
+        try:
+            msg_str = json.dumps(msg) + '\n'
+            writer.write(msg_str.encode('utf-8'))
+            await writer.drain()
+            logger.debug(f"Sent to client: {msg}")
+        except Exception as e:
+            logger.error(f"Failed to send to client: {e}")
     
     def _update_aggregated_state(self):
         """Update aggregated state from all sessions."""
@@ -509,12 +543,12 @@ class ClientProxy:
             asyncio.set_event_loop(loop)
         
         if loop.is_running():
-            # Already in event loop, create task
-            future = asyncio.run_coroutine_threadsafe(
+            # Already in event loop - schedule coroutine without blocking
+            asyncio.run_coroutine_threadsafe(
                 self._async_push_status(msg),
                 loop
             )
-            return future.result(timeout=5.0)
+            return True  # Non-blocking, fire-and-forget
         else:
             return loop.run_until_complete(self._async_push_status(msg))
     
