@@ -197,11 +197,21 @@ void loop() {
         }
     }
     
+    // Redraw the LCD only on state transitions. Per-frame full-screen redraws
+    // (fillScreen / banners / sprite push over SPI) were saturating the bus and
+    // making the LED animations stutter. The LEDs are refreshed every frame;
+    // the screen only when the state actually changes.
+    static AppState renderedState = AppState::SHOWING_REQUEST;
+    bool justEntered = (currentState != renderedState);
+    renderedState = currentState;
+
     // State machine
     switch (currentState) {
         case AppState::IDLE: {
-            animator.update();
-            animator.draw();
+            // Sprite du chat coûteux : throttle à ~8 fps pour garder la loop
+            // rapide (les LEDs s'auto-cadencent sur millis()).
+            static uint32_t lastCat = 0;
+            if (now - lastCat > 120) { lastCat = now; animator.update(); animator.draw(); }
             led::idle();
 
             // Send periodic ping
@@ -213,23 +223,27 @@ void loop() {
         }
         
         case AppState::THINKING: {
-            animator.update();
-            animator.draw();
+            // Le sprite du chat (240x240 en PSRAM) est coûteux à pousser : le
+            // dessiner à chaque frame sature la loop et ralentit les animations
+            // LED (qui s'auto-cadencent sur millis()). On le throttle à ~8 fps
+            // pour que la loop reste rapide → LEDs fluides.
+            static uint32_t lastCat = 0;
+            if (now - lastCat > 120) {
+                lastCat = now;
+                animator.update();
+                animator.draw();
+            }
             led::setAgentState(AgentState::THINKING, false, currentThinkingActivity);
             break;
         }
         
         case AppState::WAITING_INPUT: {
-            // Show waiting indicator
-            animator.update();
-            animator.draw();
+            static uint32_t lastCat = 0;
+            if (now - lastCat > 120) { lastCat = now; animator.update(); animator.draw(); }
             led::setAgentState(AgentState::WAITING);
-            
-            // Display waiting banner
-            static uint32_t lastBannerUpdate = 0;
-            if (now - lastBannerUpdate > 500) {
-                lastBannerUpdate = now;
-                // Show "waiting for input" banner
+
+            // Bannière dessinée une seule fois à l'entrée.
+            if (justEntered) {
                 M5.Lcd.setTextFont(2);
                 M5.Lcd.setTextSize(1);
                 M5.Lcd.setTextColor(0xFFA0, BLACK); // amber/yellow
@@ -241,9 +255,9 @@ void loop() {
         }
         
         case AppState::DONE: {
-            animator.update();
-            animator.draw();
-            
+            static uint32_t lastCat = 0;
+            if (now - lastCat > 120) { lastCat = now; animator.update(); animator.draw(); }
+
             // Show DONE banner and LED flourish
             if (!ledFlourishDone) {
                 led::setAgentState(AgentState::DONE, true); // flourish = true
@@ -263,48 +277,48 @@ void loop() {
         }
         
         case AppState::ERROR_STATE: {
-            animator.update();
-            animator.draw();
-            led::setAgentState(AgentState::ERROR);
-            
-            // Show error banner
-            const char* detail = serialProtocol.getStatusDetail();
-            M5.Lcd.setTextFont(2);
-            M5.Lcd.setTextSize(1);
-            M5.Lcd.setTextColor(RED, BLACK);
-            M5.Lcd.setCursor(10, 220);
-            M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
-            M5.Lcd.print(detail && detail[0] ? detail : "  Error");
+            led::setAgentState(AgentState::ERROR);   // scanner rouge, chaque frame
+            if (justEntered) {
+                const char* detail = serialProtocol.getStatusDetail();
+                M5.Lcd.fillScreen(BLACK);
+                M5.Lcd.setTextFont(2);
+                M5.Lcd.setTextSize(1);
+                M5.Lcd.setTextColor(RED, BLACK);
+                M5.Lcd.setCursor(10, 220);
+                M5.Lcd.print(detail && detail[0] ? detail : "  Error");
+            }
             break;
         }
-        
+
         case AppState::DEAD: {
-            // Show DEAD banner
-            led::setAgentState(AgentState::DEAD);
-            M5.Lcd.fillScreen(BLACK);
-            M5.Lcd.setTextFont(2);
-            M5.Lcd.setTextSize(2);
-            M5.Lcd.setTextColor(RED, BLACK);
-            M5.Lcd.setCursor(10, 100);
-            M5.Lcd.print("Agent DEAD!");
-            M5.Lcd.setTextSize(1);
-            M5.Lcd.setCursor(10, 140);
-            M5.Lcd.print("PC disconnected?");
+            led::setAgentState(AgentState::DEAD);    // scanner rouge, chaque frame
+            if (justEntered) {
+                M5.Lcd.fillScreen(BLACK);
+                M5.Lcd.setTextFont(2);
+                M5.Lcd.setTextSize(2);
+                M5.Lcd.setTextColor(RED, BLACK);
+                M5.Lcd.setCursor(10, 100);
+                M5.Lcd.print("Agent DEAD!");
+                M5.Lcd.setTextSize(1);
+                M5.Lcd.setCursor(10, 140);
+                M5.Lcd.print("PC disconnected?");
+            }
             break;
         }
-        
+
         case AppState::STUCK: {
-            // Show STUCK banner
-            led::setAgentState(AgentState::STUCK);
-            M5.Lcd.fillScreen(BLACK);
-            M5.Lcd.setTextFont(2);
-            M5.Lcd.setTextSize(2);
-            M5.Lcd.setTextColor(RED, BLACK);
-            M5.Lcd.setCursor(10, 100);
-            M5.Lcd.print("Agent STUCK!");
-            M5.Lcd.setTextSize(1);
-            M5.Lcd.setCursor(10, 140);
-            M5.Lcd.print("Generating forever?");
+            led::setAgentState(AgentState::STUCK);   // scanner rouge, chaque frame
+            if (justEntered) {
+                M5.Lcd.fillScreen(BLACK);
+                M5.Lcd.setTextFont(2);
+                M5.Lcd.setTextSize(2);
+                M5.Lcd.setTextColor(RED, BLACK);
+                M5.Lcd.setCursor(10, 100);
+                M5.Lcd.print("Agent STUCK!");
+                M5.Lcd.setTextSize(1);
+                M5.Lcd.setCursor(10, 140);
+                M5.Lcd.print("Generating forever?");
+            }
             break;
         }
         

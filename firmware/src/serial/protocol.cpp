@@ -37,19 +37,37 @@ void SerialProtocol::begin(uint32_t baud) {
 }
 
 bool SerialProtocol::receive() {
-    if (!bridgeSerial.available()) {
-        return false;
+    // Non-blocking, line-buffered read. On NE DOIT PAS appeler deserializeJson
+    // directement sur le Stream : après avoir parsé "{...}" il laisse le '\n'
+    // final, et au tour suivant deserializeJson bloque sur ce '\n' en attendant
+    // un token jusqu'au timeout du Stream (~1 s) -> freeze périodique de toute la
+    // loop (animations LED qui saccadent à chaque heartbeat). On accumule donc
+    // les octets disponibles et on ne parse qu'une ligne complète, depuis la RAM.
+    static char lineBuf[512];
+    static size_t lineLen = 0;
+
+    bool haveLine = false;
+    while (bridgeSerial.available()) {
+        char c = (char)bridgeSerial.read();
+        if (c == '\n' || c == '\r') {
+            if (lineLen > 0) { haveLine = true; break; }
+            // ligne vide -> ignorer
+        } else if (lineLen < sizeof(lineBuf) - 1) {
+            lineBuf[lineLen++] = c;
+        } else {
+            lineLen = 0;  // débordement : on jette la ligne trop longue
+        }
     }
 
-    // Read JSON from serial
-    DeserializationError error = deserializeJson(rxDoc, bridgeSerial);
+    if (!haveLine) return false;
+    lineBuf[lineLen] = '\0';
+    lineLen = 0;
 
+    DeserializationError error = deserializeJson(rxDoc, lineBuf);
     if (error) {
-        // Clear buffer on error
-        while (bridgeSerial.available()) bridgeSerial.read();
         return false;
     }
-    
+
     // Parse message type
     const char* typeStr = rxDoc["type"];
     if (!typeStr) return false;

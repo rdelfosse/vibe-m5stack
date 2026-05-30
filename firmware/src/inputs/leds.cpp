@@ -102,7 +102,6 @@ static uint32_t lastSparkleMs = 0;
 
 // Ripple (TOOL_EXEC)
 static uint32_t lastRippleMs = 0;
-static uint8_t rippleRadius = 0;  // 0 to RINGS-1
 static constexpr uint32_t RIPPLE_PERIOD_MS = 700;
 
 // Radar (READING)
@@ -112,8 +111,6 @@ static constexpr uint32_t RADAR_STEP_MS = 60;
 
 // Fill (STREAMING)
 static uint32_t lastFillMs = 0;
-static uint8_t fillLevel = 0;     // 0 to RINGS (then resets)
-static bool fillFilling = true;   // true = filling, false = emptying
 static constexpr uint32_t FILL_PERIOD_MS = 900;
 
 // --- Blinking state for ERROR/DEAD/STUCK -------------------------------------
@@ -177,26 +174,20 @@ static void animSparkle(uint32_t now) {
 
 // Ripple: radial wave from center to outer ring (TOOL_EXEC)
 static void animRipple(uint32_t now) {
-    if (now - lastRippleMs > 20) {
-        lastRippleMs = now;
-        
-        // Calculate radius based on time
-        uint32_t periodElapsed = now % RIPPLE_PERIOD_MS;
-        rippleRadius = map(periodElapsed, 0, RIPPLE_PERIOD_MS, 0, RINGS * 255);
-        rippleRadius /= 255;
-        if (rippleRadius >= RINGS) rippleRadius = RINGS - 1;
-        
-        // For each LED, brightness based on distance from ripple radius
-        for (int i = 0; i < MATRIX_LEDS; i++) {
-            uint8_t ring = RING_OF[i];
-            int8_t dist = abs((int8_t)ring - (int8_t)rippleRadius);
-            // Brightness: peak at rippleRadius, falloff on neighbors
-            uint8_t brightness = 255 - (dist * 85);
-            if (brightness > 255) brightness = 255;
-            
-            matrixB[i] = COLOR_THINK_BLUE;
-            matrixB[i] %= brightness;
-        }
+    if (now - lastRippleMs < 20) return;
+    lastRippleMs = now;
+
+    // Wavefront radius sweeps 0 .. RINGS over the period, in fixed-point 1/256
+    // units. NB: keep the intermediate in 32-bit — RINGS*256 overflows uint8_t.
+    uint32_t elapsed = now % RIPPLE_PERIOD_MS;
+    int radiusFx = (int)((elapsed * (uint32_t)RINGS * 256u) / RIPPLE_PERIOD_MS); // 0..RINGS*256
+
+    for (int i = 0; i < MATRIX_LEDS; i++) {
+        int dist = abs((int)RING_OF[i] * 256 - radiusFx); // distance to wavefront
+        int b = 255 - dist;                               // falloff ~1 ring wide
+        if (b < 0) b = 0;
+        matrixB[i] = COLOR_THINK_BLUE;
+        matrixB[i] %= (uint8_t)b;
     }
 }
 
@@ -235,35 +226,24 @@ static void animRadar(uint32_t now) {
     }
 }
 
-// Fill: progressive fill from center to outer, then empty (STREAMING)
+// Fill: progressive fill from center to outer, then resets (STREAMING)
 static void animFill(uint32_t now) {
-    if (now - lastFillMs > 20) {
-        lastFillMs = now;
-        
-        // Calculate fill level based on time
-        uint32_t periodElapsed = now % FILL_PERIOD_MS;
-        fillLevel = map(periodElapsed, 0, FILL_PERIOD_MS, 0, RINGS * 255);
-        fillLevel /= 255;
-        if (fillLevel >= RINGS) {
-            fillLevel = RINGS - 1;
-        }
-        
-        // Fill all LEDs in rings <= fillLevel
-        for (int i = 0; i < MATRIX_LEDS; i++) {
-            uint8_t ring = RING_OF[i];
-            if (ring <= fillLevel) {
-                // Filled: interpolate from blue to cyan based on ring
-                uint8_t blend = map(ring, 0, RINGS - 1, 0, 255);
-                // Manual linear interpolation
-                uint8_t r = map(blend, 0, 255, COLOR_THINK_BLUE.r, COLOR_THINK_CYAN.r);
-                uint8_t g = map(blend, 0, 255, COLOR_THINK_BLUE.g, COLOR_THINK_CYAN.g);
-                uint8_t b = map(blend, 0, 255, COLOR_THINK_BLUE.b, COLOR_THINK_CYAN.b);
-                matrixB[i] = CRGB(r, g, b);
-                matrixB[i] %= 200;
-            } else {
-                // Not filled: off
-                matrixB[i] = CRGB::Black;
-            }
+    if (now - lastFillMs < 20) return;
+    lastFillMs = now;
+
+    // Fill level sweeps 0 .. RINGS over the period, fixed-point 1/256 units.
+    uint32_t elapsed = now % FILL_PERIOD_MS;
+    int levelFx = (int)((elapsed * (uint32_t)RINGS * 256u) / FILL_PERIOD_MS); // 0..RINGS*256
+
+    for (int i = 0; i < MATRIX_LEDS; i++) {
+        if ((int)RING_OF[i] * 256 <= levelFx) {
+            // Filled: blue (centre) -> cyan (extérieur) selon l'anneau.
+            uint8_t t = (RINGS > 1) ? (uint8_t)((uint16_t)RING_OF[i] * 255 / (RINGS - 1)) : 0;
+            CRGB c = blend(COLOR_THINK_BLUE, COLOR_THINK_CYAN, t);
+            c %= 200;
+            matrixB[i] = c;
+        } else {
+            matrixB[i] = CRGB::Black;
         }
     }
 }
