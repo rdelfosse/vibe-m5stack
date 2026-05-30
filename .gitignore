@@ -41,3 +41,6 @@ uv.lock
 
 # Local scratch / tool outputs
 .tmp/
+
+# Markdown (briefs, notes — gardés en local)
+*.md
