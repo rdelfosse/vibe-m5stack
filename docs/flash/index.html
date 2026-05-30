@@ -291,17 +291,16 @@
         // NO CDN fallback - security requirement: pinned version, no external dependencies
         async function loadESPTools() {
             try {
-                const vendorResponse = await fetch('./vendor/esp-web-tools/install-button.js');
-                if (!vendorResponse.ok) {
-                    throw new Error('Not found');
-                }
-                console.log('Using auto-hosted ESP Web Tools');
+                // Importe (et EXÉCUTE) le module : c'est ce qui enregistre le custom
+                // element <esp-web-install-button>. Un simple fetch ne suffit pas.
+                await import('./vendor/esp-web-tools/install-button.js');
+                console.log('ESP Web Tools chargé (auto-hébergé, esp-web-tools@10.2.1)');
             } catch (e) {
                 document.getElementById('status').className = 'status error';
-                document.getElementById('status').textContent = 
+                document.getElementById('status').textContent =
                     'ESP Web Tools non disponible. Les fichiers vendor/esp-web-tools/ ne sont pas présents.';
                 document.getElementById('install-button').disabled = true;
-                console.error('ESP Web Tools not found in vendor directory:', e);
+                console.error('ESP Web Tools introuvable dans vendor/:', e);
             }
         }
         
