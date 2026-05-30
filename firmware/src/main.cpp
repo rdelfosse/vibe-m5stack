@@ -103,6 +103,53 @@ void resetWatchdogAlarm() {
     // This is handled in the state machine
 }
 
+// Bandeau de statut en bas d'écran : suit l'état de l'agent (et l'activité de
+// thinking). Couleur assortie à l'animation LED. Doit être (re)dessiné PAR-DESSUS
+// le sprite du chat, sinon celui-ci le recouvre.
+void drawStatusBanner() {
+    const char* text = "";
+    uint16_t color = WHITE;
+    switch (currentState) {
+        case AppState::IDLE:  text = "Ready"; color = GREEN; break;
+        case AppState::DONE:  text = "Ready"; color = GREEN; break;
+        case AppState::WAITING_INPUT: text = "Waiting for you..."; color = 0xFDE0; break;
+        case AppState::THINKING:
+            color = CYAN;
+            switch (currentThinkingActivity) {
+                case ThinkingActivity::REASONING: text = "Thinking..."; break;
+                case ThinkingActivity::TOOL_EXEC: text = "Running...";  break;
+                case ThinkingActivity::READING:   text = "Reading...";  break;
+                case ThinkingActivity::STREAMING: text = "Writing...";  break;
+            }
+            break;
+        case AppState::ERROR_STATE: {
+            const char* d = serialProtocol.getStatusDetail();
+            text = (d && d[0]) ? d : "Error";
+            color = RED;
+            break;
+        }
+        default: return;  // DEAD / STUCK / SHOWING_REQUEST : gérés en plein écran
+    }
+    M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
+    M5.Lcd.setTextFont(2);
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.setTextColor(color, BLACK);
+    M5.Lcd.setCursor(10, 221);
+    M5.Lcd.print(text);
+}
+
+// Dessine le chat (throttlé ~8 fps) puis le bandeau par-dessus. `forced` redessine
+// immédiatement (utilisé à l'entrée d'un état pour un bandeau réactif).
+void drawCatBanner(uint32_t now, bool forced) {
+    static uint32_t lastCat = 0;
+    if (forced || now - lastCat > 120) {
+        lastCat = now;
+        animator.update();
+        animator.draw();
+        drawStatusBanner();
+    }
+}
+
 void loop() {
     M5.update();
     buttonManager.update();
@@ -208,10 +255,7 @@ void loop() {
     // State machine
     switch (currentState) {
         case AppState::IDLE: {
-            // Sprite du chat coûteux : throttle à ~8 fps pour garder la loop
-            // rapide (les LEDs s'auto-cadencent sur millis()).
-            static uint32_t lastCat = 0;
-            if (now - lastCat > 120) { lastCat = now; animator.update(); animator.draw(); }
+            drawCatBanner(now, justEntered);
             led::idle();
 
             // Send periodic ping
@@ -223,52 +267,23 @@ void loop() {
         }
         
         case AppState::THINKING: {
-            // Le sprite du chat (240x240 en PSRAM) est coûteux à pousser : le
-            // dessiner à chaque frame sature la loop et ralentit les animations
-            // LED (qui s'auto-cadencent sur millis()). On le throttle à ~8 fps
-            // pour que la loop reste rapide → LEDs fluides.
-            static uint32_t lastCat = 0;
-            if (now - lastCat > 120) {
-                lastCat = now;
-                animator.update();
-                animator.draw();
-            }
+            // Chat throttlé + bandeau (le bandeau suit l'activité de thinking).
+            drawCatBanner(now, justEntered);
             led::setAgentState(AgentState::THINKING, false, currentThinkingActivity);
             break;
         }
         
         case AppState::WAITING_INPUT: {
-            static uint32_t lastCat = 0;
-            if (now - lastCat > 120) { lastCat = now; animator.update(); animator.draw(); }
+            drawCatBanner(now, justEntered);
             led::setAgentState(AgentState::WAITING);
-
-            // Bannière dessinée une seule fois à l'entrée.
-            if (justEntered) {
-                M5.Lcd.setTextFont(2);
-                M5.Lcd.setTextSize(1);
-                M5.Lcd.setTextColor(0xFFA0, BLACK); // amber/yellow
-                M5.Lcd.setCursor(10, 220);
-                M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
-                M5.Lcd.print("  Waiting for your response...");
-            }
             break;
         }
         
         case AppState::DONE: {
-            static uint32_t lastCat = 0;
-            if (now - lastCat > 120) { lastCat = now; animator.update(); animator.draw(); }
-
-            // Show DONE banner and LED flourish
+            drawCatBanner(now, justEntered);
+            // LED flourish une seule fois, puis vert fixe.
             if (!ledFlourishDone) {
-                led::setAgentState(AgentState::DONE, true); // flourish = true
-                
-                M5.Lcd.setTextFont(2);
-                M5.Lcd.setTextSize(1);
-                M5.Lcd.setTextColor(GREEN, BLACK);
-                M5.Lcd.setCursor(10, 220);
-                M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
-                M5.Lcd.print("  Ready");
-                
+                led::setAgentState(AgentState::DONE, true);  // flourish
                 ledFlourishDone = true;
             } else {
                 led::setAgentState(AgentState::DONE, false); // steady
@@ -279,13 +294,8 @@ void loop() {
         case AppState::ERROR_STATE: {
             led::setAgentState(AgentState::ERROR);   // scanner rouge, chaque frame
             if (justEntered) {
-                const char* detail = serialProtocol.getStatusDetail();
                 M5.Lcd.fillScreen(BLACK);
-                M5.Lcd.setTextFont(2);
-                M5.Lcd.setTextSize(1);
-                M5.Lcd.setTextColor(RED, BLACK);
-                M5.Lcd.setCursor(10, 220);
-                M5.Lcd.print(detail && detail[0] ? detail : "  Error");
+                drawStatusBanner();                  // "detail" ou "Error" en rouge
             }
             break;
         }
