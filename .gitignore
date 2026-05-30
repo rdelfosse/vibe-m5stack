@@ -47,3 +47,7 @@ uv.lock
 
 # Markdown (briefs, notes — gardés en local)
 *.md
+!CHANGELOG.md
+!README.md
+!LICENSE
+!NOTICE

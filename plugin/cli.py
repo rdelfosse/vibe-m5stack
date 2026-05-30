@@ -24,6 +24,7 @@ and configuration without starting the full application.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -46,12 +47,20 @@ def print_status(symbol: str, message: str, status: str = "info") -> None:
     use_color = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
     if not use_color:
         # Fallback for non-color terminals
-        symbols_map = {"✓": "[OK]", "✗": "[FAIL]", "?": "[WARN]", "i": "[INFO]"}
+        symbols_map = {"✓": "[OK]", "✗": "[FAIL]", "?": "[WARN]", "⚠": "[WARN]", "i": "[INFO]"}
         symbol = symbols_map.get(symbol, symbol)
-        print(f"{symbol} {message}")
+        # Sécurité encodage : sur une console Windows cp1252, un symbole unicode non
+        # mappé (ex. ⚠) ferait planter print() avec UnicodeEncodeError.
+        try:
+            print(f"{symbol} {message}")
+        except UnicodeEncodeError:
+            print(f"{message}".encode("ascii", "replace").decode("ascii"))
     else:
         color = colors.get(status, colors["info"])
-        print(f"{color}{symbol} {message}{reset}")
+        try:
+            print(f"{color}{symbol} {message}{reset}")
+        except UnicodeEncodeError:
+            print(f"{color}{message}{reset}".encode("ascii", "replace").decode("ascii"))
 
 
 def check_pyserial() -> Tuple[bool, str]:
@@ -96,13 +105,17 @@ def check_port_resolved() -> Tuple[bool, str]:
     return False, "Port non résolu (essaye M5STACK_PORT ou vibe-m5stack setup)"
 
 
-def check_firmware_responds(port: Optional[str] = None) -> Tuple[bool, str]:
-    """Check if firmware responds to ping on the given port."""
+def check_firmware_responds(port: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
+    """Check if firmware responds to ping on the given port.
+    
+    Returns:
+        Tuple of (success, message, firmware_version)
+    """
     if port is None:
         port = config.resolve_port()
     
     if not port:
-        return False, "Aucun port pour tester"
+        return False, "Aucun port pour tester", None
     
     try:
         import serial
@@ -110,6 +123,7 @@ def check_firmware_responds(port: Optional[str] = None) -> Tuple[bool, str]:
             # Wait for a ping message (firmware sends every 5s in IDLE)
             deadline = time.monotonic() + 7.0
             buf = b""
+            fw_version = None
             while time.monotonic() < deadline:
                 if ser.in_waiting:
                     buf += ser.read(ser.in_waiting or 1)
@@ -120,15 +134,16 @@ def check_firmware_responds(port: Optional[str] = None) -> Tuple[bool, str]:
                     try:
                         msg = json.loads(line.decode("utf-8", errors="ignore"))
                         if isinstance(msg, dict) and msg.get("type") == "ping":
-                            return True, f"Firmware répond sur {port} (ping reçu)"
+                            fw_version = msg.get("fw")
+                            return True, f"Firmware répond sur {port} (ping reçu)", fw_version
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         pass
                 
                 time.sleep(0.05)
             
-            return False, f"Pas de réponse du firmware sur {port} (timeout 7s)"
+            return False, f"Pas de réponse du firmware sur {port} (timeout 7s)", None
     except Exception as e:
-        return False, f"Erreur de connexion sur {port}: {e}"
+        return False, f"Erreur de connexion sur {port}: {e}", None
 
 
 def check_entrypoints() -> Tuple[bool, str]:
@@ -178,6 +193,70 @@ def check_bt_ports() -> Tuple[bool, str]:
         return False, f"Erreur de détection Bluetooth: {e}"
 
 
+def parse_version(version_str: str) -> Tuple[int, int, int]:
+    """Parse a SemVer version string into (major, minor, patch).
+    
+    Returns (0, 0, 0) for invalid versions.
+    """
+    if not version_str:
+        return (0, 0, 0)
+    # Remove leading 'v' if present
+    version_str = version_str.lstrip('v')
+    # Match X.Y.Z pattern
+    match = re.match(r'^(\d+)\.(\d+)\.(\d+)', version_str)
+    if match:
+        return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    return (0, 0, 0)
+
+
+def compare_versions(v1: str, v2: str) -> int:
+    """Compare two SemVer version strings.
+    
+    Returns:
+        -1 if v1 < v2
+        0 if v1 == v2
+        1 if v1 > v2
+    """
+    major1, minor1, patch1 = parse_version(v1)
+    major2, minor2, patch2 = parse_version(v2)
+    
+    if major1 < major2:
+        return -1
+    elif major1 > major2:
+        return 1
+    
+    if minor1 < minor2:
+        return -1
+    elif minor1 > minor2:
+        return 1
+    
+    if patch1 < patch2:
+        return -1
+    elif patch1 > patch2:
+        return 1
+    
+    return 0
+
+
+def get_plugin_version() -> str:
+    """Get the plugin version from VERSION file or package metadata."""
+    # Try reading VERSION file first
+    version_file = Path(__file__).parent.parent / "VERSION"
+    if version_file.exists():
+        try:
+            with open(version_file, 'r') as f:
+                return f.read().strip()
+        except Exception:
+            pass
+    
+    # Fallback to package metadata
+    try:
+        from importlib.metadata import version
+        return version("vibe-m5stack")
+    except Exception:
+        return "0.2.0"  # Default fallback
+
+
 def cmd_doctor() -> int:
     """
     Run diagnostics and display system status.
@@ -198,8 +277,12 @@ def cmd_doctor() -> int:
     
     # Only check firmware if port is resolved
     port = config.resolve_port()
+    firmware_version = None
     if port:
-        checks.append(("Firmware", lambda: check_firmware_responds(port), "firmware"))
+        firmware_check = check_firmware_responds(port)
+        # firmware_check returns (passed, message, fw_version)
+        checks.append(("Firmware", lambda fv=firmware_check: fv, "firmware"))
+        firmware_version = firmware_check[2]
     
     checks.extend([
         ("Entrypoints", check_entrypoints, "install"),
@@ -213,7 +296,15 @@ def cmd_doctor() -> int:
     all_passed = True
     for name, check_func, category in checks:
         try:
-            passed, message = check_func()
+            result = check_func()
+            # Handle both (passed, message) and (passed, message, fw_version) returns
+            if isinstance(result, tuple) and len(result) == 3:
+                passed, message, fw_version = result
+                # Store firmware version from the firmware check
+                if name == "Firmware" and fw_version:
+                    firmware_version = fw_version
+            else:
+                passed, message = result
             symbol = "✓" if passed else "✗"
             status = "success" if passed else "error"
             print_status(symbol, f"{name:20s} {message}", status)
@@ -222,6 +313,18 @@ def cmd_doctor() -> int:
         except Exception as e:
             print_status("✗", f"{name:20s} Erreur: {e}", "error")
             all_passed = False
+    
+    # Firmware version compatibility check
+    if firmware_version:
+        plugin_version = get_plugin_version()
+        cmp_result = compare_versions(firmware_version, plugin_version)
+        if cmp_result < 0:
+            print_status("⚠", f"Version firmware {firmware_version} < plugin {plugin_version} - reflashe via le web flasher", "warning")
+        else:
+            print_status("✓", f"Version firmware: {firmware_version} (compatible avec plugin {plugin_version})", "info")
+    elif port:
+        # Firmware responded but no version field (old firmware)
+        print_status("⚠", "Firmware sans champ 'fw' - firmware ancien, reflashe via le web flasher", "warning")
     
     print("\n" + "=" * 60)
     if all_passed:

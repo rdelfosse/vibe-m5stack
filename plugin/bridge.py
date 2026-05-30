@@ -94,6 +94,7 @@ class M5StackBridge:
         # Serialize writes: the broker heartbeat thread and the approval path
         # both call send() on the same persistent connection.
         self._write_lock = threading.Lock()
+        self.firmware_version: Optional[str] = None
 
         if auto_connect:
             self.connect()
@@ -234,7 +235,9 @@ class M5StackBridge:
                                 # consumes the queue between approvals, so pings
                                 # (every 5s) would grow it unbounded. The PC has no
                                 # use for them.
+                                # BUT: capture fw version from ping before dropping
                                 if isinstance(msg, dict) and msg.get("type") == "ping":
+                                    self.firmware_version = msg.get("fw")
                                     continue
                                 self.message_queue.put(msg)
                             except json.JSONDecodeError:

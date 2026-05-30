@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vibe-m5stack"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Physical approval device (M5Stack Fire) for Mistral Vibe CLI"
 requires-python = ">=3.10"
 dependencies = [
@@ -41,6 +41,9 @@ m5stack-mcp-server = "plugin.mcp_server:main"
 
 [tool.setuptools]
 packages = ["plugin"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

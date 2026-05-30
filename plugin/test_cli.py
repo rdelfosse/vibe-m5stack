@@ -218,7 +218,7 @@ class TestDoctorCommand:
             with patch('plugin.cli.list_serial_ports', return_value=[MockSerialPort("COM8")]):
                 with patch('plugin.cli.check_cp210x_present', return_value=(True, "CP210x trouvé")):
                     with patch('plugin.cli.config.resolve_port', return_value='COM8'):
-                        with patch('plugin.cli.check_firmware_responds', return_value=(True, "Firmware OK")):
+                        with patch('plugin.cli.check_firmware_responds', return_value=(True, "Firmware OK", "0.2.0")):
                             with patch('plugin.cli.check_entrypoints', return_value=(True, "Entrypoints OK")):
                                 with patch('plugin.cli.check_vibe_importable', return_value=(True, "vibe OK")):
                                     with patch('plugin.cli.config.get_config_transport', return_value='usb'):
