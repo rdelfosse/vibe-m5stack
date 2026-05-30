@@ -619,4 +619,4 @@ hors d'un dossier sync cloud (ex: `C:\Users\<user>\github\`).
 
 ## Licence
 
-MIT.
+[Apache License 2.0](LICENSE).
