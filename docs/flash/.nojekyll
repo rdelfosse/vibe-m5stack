@@ -1,0 +1,2 @@
+# Prevent GitHub Pages from ignoring files starting with underscore
+# or files that Jekyll would normally process

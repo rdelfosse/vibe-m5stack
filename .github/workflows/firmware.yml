@@ -1,0 +1,190 @@
+name: Build and Release Firmware
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      manual_release:
+        description: 'Trigger manual firmware build and release'
+        required: false
+
+jobs:
+  build:
+    name: Build Firmware
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+      
+      - name: Build firmware
+        run: |
+          cd firmware
+          pio run
+      
+      - name: Find bootloader and partition binaries
+        id: find_bins
+        run: |
+          # PlatformIO build outputs are in .pio/build/<board>
+          BOARD_DIR=".pio/build/m5stack-fire"
+          
+          # Find bootloader
+          BOOTLOADER=$(find $BOARD_DIR -name "bootloader*.bin" | head -1)
+          if [ -z "$BOOTLOADER" ]; then
+            echo "::error::Bootloader binary not found!"
+            exit 1
+          fi
+          echo "bootloader=$BOOTLOADER" >> $GITHUB_OUTPUT
+          
+          # Find partition table
+          PARTITIONS=$(find $BOARD_DIR -name "partitions*.bin" | head -1)
+          if [ -z "$PARTITIONS" ]; then
+            echo "::error::Partitions binary not found!"
+            exit 1
+          fi
+          echo "partitions=$PARTITIONS" >> $GITHUB_OUTPUT
+          
+          # Find firmware binary
+          FIRMWARE=$(find $BOARD_DIR -name "firmware*.bin" | head -1)
+          if [ -z "$FIRMWARE" ]; then
+            echo "::error::Firmware binary not found!"
+            exit 1
+          fi
+          echo "firmware=$FIRMWARE" >> $GITHUB_OUTPUT
+          
+          # Find boot_app0.bin from framework
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name "boot_app0.bin" | head -1)
+          if [ -z "$BOOT_APP0" ]; then
+            echo "::warning::boot_app0.bin not found, will try alternative path"
+            # Try without tilde expansion
+            BOOT_APP0=$(find $HOME/.platformio/packages/framework-arduinoespressif32 -name "boot_app0.bin" | head -1)
+          fi
+          if [ -z "$BOOT_APP0" ]; then
+            echo "::error::boot_app0.bin not found!"
+            exit 1
+          fi
+          echo "boot_app0=$BOOT_APP0" >> $GITHUB_OUTPUT
+          
+          # Create output directory
+          mkdir -p firmware/bin
+          cp "$BOOTLOADER" "$PARTITIONS" "$FIRMWARE" firmware/bin/
+      
+      - name: Merge binaries with esptool
+        run: |
+          python -m pip install esptool
+          
+          BOARD_DIR=".pio/build/m5stack-fire"
+          OUTPUT_DIR="firmware/bin"
+          
+          # Get the actual filenames
+          BOOTLOADER=$(ls $OUTPUT_DIR/bootloader*.bin | head -1)
+          PARTITIONS=$(ls $OUTPUT_DIR/partitions*.bin | head -1)
+          FIRMWARE=$(ls $OUTPUT_DIR/firmware*.bin | head -1)
+          
+          # Find boot_app0.bin
+          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name "boot_app0.bin" | head -1)
+          if [ -z "$BOOT_APP0" ]; then
+            BOOT_APP0=$(find $HOME/.platformio/packages/framework-arduinoespressif32 -name "boot_app0.bin" | head -1)
+          fi
+          
+          # Merge binaries at correct offsets
+          esptool.py --chip esp32 merge_bin \
+            -o firmware/bin/firmware-merged.bin \
+            0x1000 "$BOOTLOADER" \
+            0x8000 "$PARTITIONS" \
+            0xe000 "$BOOT_APP0" \
+            0x10000 "$FIRMWARE"
+      
+      - name: Create manifest.json
+        run: |
+          # Extract version from git tag
+          VERSION=${GITHUB_REF#refs/tags/v}
+          if [ -z "$VERSION" ]; then
+            VERSION="dev-$(date +%Y%m%d%H%M)"
+          fi
+          
+          # Get git commit hash
+          COMMIT=$(git rev-parse --short HEAD)
+          
+          cat > firmware/bin/manifest.json << EOF
+          {
+            "name": "vibe-m5stack",
+            "version": "$VERSION",
+            "commit": "$COMMIT",
+            "builds": [
+              {
+                "chipFamily": "ESP32",
+                "parts": [
+                  {
+                    "path": "firmware-merged.bin",
+                    "offset": 0
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          
+          cat firmware/bin/manifest.json
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: firmware/bin/
+          retention-days: 7
+      
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-binaries
+          path: firmware/bin/
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            firmware/bin/firmware-merged.bin
+            firmware/bin/manifest.json
+          generate_release_notes: true
+      
+      - name: Commit to docs/flash/ (for GitHub Pages)
+        run: |
+          # Only do this on tagged releases
+          if [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            git config --global user.name "GitHub Actions"
+            git config --global user.email "actions@github.com"
+            
+            # Create docs/flash directory
+            mkdir -p docs/flash
+            
+            # Copy binaries to docs/flash/
+            cp firmware/bin/firmware-merged.bin docs/flash/
+            cp firmware/bin/manifest.json docs/flash/
+            
+            # Commit and push
+            git add docs/flash/firmware-merged.bin docs/flash/manifest.json
+            git commit -m "docs: update firmware binaries for ${{ github.ref }}"
+            git push origin HEAD:main
+          fi

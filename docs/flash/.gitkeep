@@ -1,0 +1,2 @@
+# This file ensures the docs/flash/ directory is tracked by git
+# The actual firmware-merged.bin and manifest.json will be added by CI
