@@ -252,8 +252,7 @@
         </p>
     </div>
     
-    <!-- ESP Web Tools - Auto-hosted version will be added to vendor/ -->
-    <!-- For now, using CDN with integrity as fallback -->
+    <!-- ESP Web Tools - Auto-hosted only, NO CDN fallback for security -->
     <script type="module">
         // Check for Web Serial support
         if (!('serial' in navigator)) {
@@ -288,22 +287,22 @@
             document.getElementById('status').textContent = 'Attente de la sélection du port...';
         });
         
-        // Load ESP Web Tools from vendor or CDN fallback
+        // Load ESP Web Tools ONLY from auto-hosted vendor directory
+        // NO CDN fallback - security requirement: pinned version, no external dependencies
         async function loadESPTools() {
             try {
-                // Try vendor first (will be added when ESP Web Tools is downloaded)
                 const vendorResponse = await fetch('./vendor/esp-web-tools/install-button.js');
-                if (vendorResponse.ok) {
-                    console.log('Using auto-hosted ESP Web Tools');
-                    return;
+                if (!vendorResponse.ok) {
+                    throw new Error('Not found');
                 }
+                console.log('Using auto-hosted ESP Web Tools');
             } catch (e) {
-                console.log('Vendor ESP Web Tools not found, using CDN');
+                document.getElementById('status').className = 'status error';
+                document.getElementById('status').textContent = 
+                    'ESP Web Tools non disponible. Les fichiers vendor/esp-web-tools/ ne sont pas présents.';
+                document.getElementById('install-button').disabled = true;
+                console.error('ESP Web Tools not found in vendor directory:', e);
             }
-            
-            // Fallback to CDN with integrity (specific version for security)
-            console.log('Loading ESP Web Tools from CDN...');
-            await import('https://espressif.github.io/esp-web-tools/dist/web/install-button.js');
         }
         
         loadESPTools();

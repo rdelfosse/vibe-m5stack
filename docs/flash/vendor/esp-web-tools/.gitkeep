@@ -1,0 +1,3 @@
+# ESP Web Tools files go here
+# Run: npm pack @espressif/esp-web-tools@10.0.0 && tar -xzf *.tgz && cp -r package/dist/web/* docs/flash/vendor/esp-web-tools/
+# Then commit the actual files (install-button.js, install-button.js.map)

@@ -28,12 +28,74 @@ import os
 from pathlib import Path
 
 
+def _handle_cli_command(argv: list) -> bool:
+    """
+    Handle CLI subcommands (setup, doctor) before loading Vibe.
+    
+    Args:
+        argv: Command line arguments
+    
+    Returns:
+        True if a CLI command was handled, False otherwise
+    """
+    # CLI commands that should NOT load Vibe
+    cli_commands = {'setup', 'doctor'}
+    
+    # Determine the command position based on how we were called
+    # Cases:
+    # ['vibe-m5stack', 'setup', ...] -> command at index 1
+    # ['plugin', 'setup', ...] -> command at index 1
+    # ['python', '-m', 'plugin', 'setup', ...] -> command at index 3
+    
+    command_idx = 1
+    if len(argv) >= 3 and argv[0] in ('python', 'python.exe') and argv[1] == '-m':
+        # python -m plugin <command>
+        command_idx = 3
+    elif len(argv) >= 2 and argv[0] in ('python', 'python.exe') and argv[1].endswith('__main__.py'):
+        # python ./plugin/__main__.py <command>
+        command_idx = 2
+    
+    # Check if we have a command at the determined position
+    if len(argv) <= command_idx:
+        return False
+    
+    command = argv[command_idx].lower()
+    
+    if command in cli_commands:
+        # Dispatch to CLI command handler
+        from plugin.cli import main as cli_main
+        
+        # Build new_argv for CLI
+        # argv is typically: ['vibe-m5stack', 'setup', ...] or ['python', '-m', 'plugin', 'setup', ...]
+        if len(argv) >= 3 and argv[0] in ('python', 'python.exe') and argv[1] == '-m':
+            # Called as: python -m plugin setup
+            new_argv = ['vibe-m5stack'] + argv[3:]
+        elif len(argv) >= 2 and argv[0] in ('python', 'python.exe') and argv[1].endswith('__main__.py'):
+            # Called as: python ./plugin/__main__.py setup
+            new_argv = ['vibe-m5stack'] + argv[2:]
+        else:
+            # Called as: vibe-m5stack setup or plugin setup
+            new_argv = argv[:]
+        
+        sys.argv = new_argv
+        exit_code = cli_main()
+        sys.exit(exit_code)
+    
+    return False
+
+
 def main():
     """Entry point for vibe-m5stack command."""
     # Add plugin directory to path (in case we're run from elsewhere)
     _PLUGIN_DIR = Path(__file__).parent.resolve()
     if str(_PLUGIN_DIR) not in sys.path:
         sys.path.insert(0, str(_PLUGIN_DIR))
+
+    # Handle CLI subcommands (setup, doctor) BEFORE loading vibe
+    # This allows diagnostics and setup without requiring vibe to be installed
+    if _handle_cli_command(sys.argv):
+        # Command was handled, we already exited
+        return
 
     # Check if vibe is available
     try:

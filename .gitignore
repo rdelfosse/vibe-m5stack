@@ -5,8 +5,11 @@ build/
 # Arduino
 *.elf
 *.hex
-*.bin
 *.eep
+
+# ESP32 firmware binaries - ignore except web flasher files
+*.bin
+!docs/flash/firmware-merged.bin
 
 # Python
 __pycache__/
