@@ -94,7 +94,8 @@ def check_cp210x_present() -> Tuple[bool, str]:
         if any(kw in port_str for kw in cp210x_keywords):
             return True, f"Trouvé: {port.device} ({port.description})"
     
-    return False, f"Ports trouvés mais pas de CP210x/CH340: {', '.join([p.device for p in ports])}"
+    return False, (f"Pas de CP210x/CH340 ({', '.join([p.device for p in ports])}) — "
+                   "requis pour FLASHER le M5Stack Fire (USB) ; pas nécessaire au runtime Bluetooth")
 
 
 def check_port_resolved() -> Tuple[bool, str]:
@@ -268,33 +269,38 @@ def cmd_doctor() -> int:
     print("  VIBE M5STACK - Diagnostic (doctor)")
     print("=" * 60 + "\n")
     
+    # Each check: (nom, fonction, catégorie, required).
+    # required=False -> un échec est un WARNING (⚠) non bloquant. Cas CP210x : le
+    # driver USB-UART est requis pour FLASHER le Fire (USB), mais pas au runtime
+    # Bluetooth. Si le device tourne déjà en BT, son absence ne doit pas faire
+    # échouer le diagnostic — d'où le warning (et non un échec dur).
     checks = [
-        ("pyserial", check_pyserial, "pyserial"),
-        ("Ports série", lambda: (True, f"{len(list_serial_ports())} port(s) détecté(s)") if list_serial_ports() else (False, "Aucun port série"), "ports"),
-        ("CP210x/CH340", check_cp210x_present, "hardware"),
-        ("Port résolu", check_port_resolved, "config"),
+        ("pyserial", check_pyserial, "pyserial", True),
+        ("Ports série", lambda: (True, f"{len(list_serial_ports())} port(s) détecté(s)") if list_serial_ports() else (False, "Aucun port série"), "ports", True),
+        ("CP210x/CH340", check_cp210x_present, "hardware", False),
+        ("Port résolu", check_port_resolved, "config", True),
     ]
-    
+
     # Only check firmware if port is resolved
     port = config.resolve_port()
     firmware_version = None
     if port:
         firmware_check = check_firmware_responds(port)
         # firmware_check returns (passed, message, fw_version)
-        checks.append(("Firmware", lambda fv=firmware_check: fv, "firmware"))
+        checks.append(("Firmware", lambda fv=firmware_check: fv, "firmware", True))
         firmware_version = firmware_check[2]
-    
+
     checks.extend([
-        ("Entrypoints", check_entrypoints, "install"),
-        ("vibe importable", check_vibe_importable, "python"),
+        ("Entrypoints", check_entrypoints, "install", True),
+        ("vibe importable", check_vibe_importable, "python", True),
     ])
-    
-    # Check BT only if transport is bt
+
+    # Check BT only if transport is bt (non bloquant)
     if config.get_config_transport() == "bt":
-        checks.append(("BT ports", check_bt_ports, "bluetooth"))
-    
+        checks.append(("BT ports", check_bt_ports, "bluetooth", False))
+
     all_passed = True
-    for name, check_func, category in checks:
+    for name, check_func, category, required in checks:
         try:
             result = check_func()
             # Handle both (passed, message) and (passed, message, fw_version) returns
@@ -305,14 +311,20 @@ def cmd_doctor() -> int:
                     firmware_version = fw_version
             else:
                 passed, message = result
-            symbol = "✓" if passed else "✗"
-            status = "success" if passed else "error"
-            print_status(symbol, f"{name:20s} {message}", status)
-            if not passed:
+            if passed:
+                symbol, status = "✓", "success"
+            elif required:
+                symbol, status = "✗", "error"
                 all_passed = False
+            else:
+                # Échec non bloquant -> warning
+                symbol, status = "⚠", "warning"
+            print_status(symbol, f"{name:20s} {message}", status)
         except Exception as e:
-            print_status("✗", f"{name:20s} Erreur: {e}", "error")
-            all_passed = False
+            symbol, status = ("✗", "error") if required else ("⚠", "warning")
+            print_status(symbol, f"{name:20s} Erreur: {e}", status)
+            if required:
+                all_passed = False
     
     # Firmware version compatibility check
     if firmware_version:
