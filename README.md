@@ -24,6 +24,24 @@ pour signaler l'attente.
 
 > 📝 **Article complet** : [Un bouton physique pour valider les actions des agents IA](https://www.romaindelfosse.fr/blog/m5stack-vibe-bouton-physique-agents-ia/) — contexte, démo et retour d'expérience.
 
+<p align="center">
+  <img src="docs/images/cover-idle.jpg" width="49%" alt="M5Stack Fire au repos : chat Mistral animé sur bandes rainbow, NeoHEX 37 posé dessus">
+  <img src="docs/images/cover-request.jpg" width="49%" alt="M5Stack pendant une demande d'approbation : NeoHEX allumé en vert, écran affichant l'outil et le fichier, boutons A APPROVE / B REJECT / C CANCEL">
+</p>
+<p align="center"><em>À gauche : au repos, le chat Mistral danse. À droite : demande d'approbation — le NeoHEX s'allume, l'écran montre l'action, tu valides au bouton <strong>A</strong> / <strong>B</strong> / <strong>C</strong>.</em></p>
+
+<details>
+<summary>📸 Photos réelles (non retouchées)</summary>
+<br/>
+<p align="center">
+  <img src="docs/images/approval.jpg" width="60%" alt="Écran d'approbation réel : [abe1d547] search_replace sur readme.txt, NeoHEX allumé">
+</p>
+<p align="center">
+  <img src="docs/images/idle-cat.jpg" width="39%" alt="M5Stack au repos, vue de face">
+  <img src="docs/images/idle-angle.jpg" width="39%" alt="M5Stack et NeoHEX, vue d'angle">
+</p>
+</details>
+
 ```
 PC (vibe-m5stack)  ──hook Python──>  plugin/vibe_m5stack_hook.py
                                               │
