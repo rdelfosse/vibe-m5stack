@@ -110,6 +110,7 @@ class OwnerBroker:
         self.aggregated_detail = ""
         self.aggregated_seq = 0
         self.lock = threading.Lock()
+        self.device_lock = threading.Lock()  # Serializes device approval access
         self.running = False
         self.heartbeat_thread: Optional[threading.Thread] = None
         self.last_heartbeat_time = 0
@@ -255,13 +256,13 @@ class OwnerBroker:
             # Run in thread to avoid blocking the client handler
             def handle_client_approval():
                 try:
-                    response = self.bridge.request_approval_persistent(title, body, request_id)
+                    response = self.request_approval(title, body, request_id)
                     if response:
                         response['session'] = session
                         # Send response back to client
                         try:
                             import asyncio
-                            loop = self.server._loop if hasattr(self.server, '_loop') else None
+                            loop = self.server.get_loop() if self.server else None
                             if loop and not loop.is_closed():
                                 asyncio.run_coroutine_threadsafe(
                                     self._send_to_client(writer, response),
@@ -347,14 +348,16 @@ class OwnerBroker:
         """
         Show an approval on the device over the persistent connection.
         Pauses status/heartbeat sends while the request is on screen.
+        FIFO serialized: only one approval touches the device at a time.
         """
-        self.approval_active = True
-        try:
-            return self.bridge.request_approval_persistent(
-                title[:40], body[:200], request_id
-            )
-        finally:
-            self.approval_active = False
+        with self.device_lock:  # Serializes device approval access
+            self.approval_active = True
+            try:
+                return self.bridge.request_approval_persistent(
+                    title[:40], body[:200], request_id
+                )
+            finally:
+                self.approval_active = False
 
     def push_status(self, state: str, detail: str = "", seq: int = 0, activity: str = "", session: str = "owner"):
         """Push status for this owner session."""

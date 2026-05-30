@@ -123,16 +123,29 @@ async def test_client_proxy_send_message():
 class TestBrokerManager:
     """Tests for BrokerManager election logic."""
     
-    def setup_method(self):
-        # Clean up any existing lock files
-        lock_path = Path.home() / ".vibe" / "m5stack.owner.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        if lock_path.exists():
-            lock_path.unlink()
+    def setup_method(self, method):
+        # Use temporary directory for lock files to avoid conflicts with real sessions
+        import plugin.broker as broker_module
+        self._tmp_dir = tempfile.mkdtemp()
+        self._orig_owner_lock = broker_module.OWNER_LOCK_PATH
+        self._orig_broker_file = broker_module.BROKER_FILE_PATH
         
-        broker_path = Path.home() / ".vibe" / "m5stack.broker"
-        if broker_path.exists():
-            broker_path.unlink()
+        # Patch module-level constants to use temp directory
+        broker_module.OWNER_LOCK_PATH = Path(self._tmp_dir) / "m5stack.owner.lock"
+        broker_module.BROKER_FILE_PATH = Path(self._tmp_dir) / "m5stack.broker"
+        
+        # Clean up any existing files in temp dir
+        for p in [broker_module.OWNER_LOCK_PATH, broker_module.BROKER_FILE_PATH]:
+            if p.exists():
+                p.unlink(missing_ok=True)
+    
+    def teardown_method(self, method):
+        # Restore original constants and clean up temp directory
+        import plugin.broker as broker_module
+        import shutil
+        broker_module.OWNER_LOCK_PATH = self._orig_owner_lock
+        broker_module.BROKER_FILE_PATH = self._orig_broker_file
+        shutil.rmtree(self._tmp_dir, ignore_errors=True)
     
     def test_first_session_becomes_owner(self):
         mock_bridge = MagicMock()
