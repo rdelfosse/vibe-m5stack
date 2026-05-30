@@ -1,4 +1,19 @@
 """
+Vibe M5Stack - M5Stack integration for Mistral Vibe CLI
+Copyright 2026 Romain Delfosse
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+""""""
 Integration test for the M5Stack approval hook.
 
 Tests that the hook properly patches AgentLoop and VibeApp.
@@ -57,37 +72,39 @@ async def test_callback_with_mock_bridge():
         return {"approved": True, "cancelled": False}
     
     raw_bridge.request_approval = mock_request_approval
-    
+
     hook_module._bridge = hook_module.ThreadSafeM5StackBridge(raw_bridge)
-    
-    # Call the callback
-    result = await callback(
-        tool_name="write_file",
-        args=MockArgs(),
-        tool_call_id="test-123",
-        required_permissions=None
-    )
-    
-    assert result[0] == ApprovalResponse.YES
-    assert result[1] is None
-    print("+ Callback works with mock bridge (approval)")
-    
-    # Test rejection
-    def mock_request_reject(title, body, timeout=30.0):
-        return {"approved": False, "cancelled": True}
-    
-    raw_bridge.request_approval = mock_request_reject
-    
-    result = await callback(
-        tool_name="write_file",
-        args=MockArgs(),
-        tool_call_id="test-123",
-        required_permissions=None
-    )
-    
-    assert result[0] == ApprovalResponse.NO
-    assert "M5Stack" in result[1]
-    print("+ Callback works with mock bridge (rejection)")
+
+    # Force the ephemeral _bridge fallback (no owner-broker / no hardware).
+    with patch.object(hook_module, "get_or_init_broker", return_value=None):
+        # Call the callback
+        result = await callback(
+            tool_name="write_file",
+            args=MockArgs(),
+            tool_call_id="test-123",
+            required_permissions=None
+        )
+
+        assert result[0] == ApprovalResponse.YES
+        assert result[1] is None
+        print("+ Callback works with mock bridge (approval)")
+
+        # Test rejection
+        def mock_request_reject(title, body, timeout=30.0):
+            return {"approved": False, "cancelled": True}
+
+        raw_bridge.request_approval = mock_request_reject
+
+        result = await callback(
+            tool_name="write_file",
+            args=MockArgs(),
+            tool_call_id="test-123",
+            required_permissions=None
+        )
+
+        assert result[0] == ApprovalResponse.NO
+        assert "M5Stack" in result[1]
+        print("+ Callback works with mock bridge (rejection)")
 
 
 async def test_callback_error_handling():

@@ -1,3 +1,17 @@
+// Vibe M5Stack - M5Stack integration for Mistral Vibe CLI
+// Copyright 2026 Romain Delfosse
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 #include "protocol.h"
 #include "serial_io.h"
 #include <Arduino.h>
@@ -7,9 +21,15 @@ SerialProtocol::SerialProtocol()
       lastRequestId(0),
       lastCreditPercent(0),
       creditInfoValid(false),
-      newMessageAvailable(false) {
+      newMessageAvailable(false),
+      lastAgentState(AgentState::DONE),
+      lastStatusSeq(0),
+      statusValid(false),
+      lastThinkingActivity(ThinkingActivity::REASONING),
+      thinkingActivityValid(false) {
     lastTitle[0] = '\0';
     lastBody[0] = '\0';
+    lastStatusDetail[0] = '\0';
 }
 
 void SerialProtocol::begin(uint32_t baud) {
@@ -17,19 +37,37 @@ void SerialProtocol::begin(uint32_t baud) {
 }
 
 bool SerialProtocol::receive() {
-    if (!bridgeSerial.available()) {
-        return false;
+    // Non-blocking, line-buffered read. On NE DOIT PAS appeler deserializeJson
+    // directement sur le Stream : après avoir parsé "{...}" il laisse le '\n'
+    // final, et au tour suivant deserializeJson bloque sur ce '\n' en attendant
+    // un token jusqu'au timeout du Stream (~1 s) -> freeze périodique de toute la
+    // loop (animations LED qui saccadent à chaque heartbeat). On accumule donc
+    // les octets disponibles et on ne parse qu'une ligne complète, depuis la RAM.
+    static char lineBuf[512];
+    static size_t lineLen = 0;
+
+    bool haveLine = false;
+    while (bridgeSerial.available()) {
+        char c = (char)bridgeSerial.read();
+        if (c == '\n' || c == '\r') {
+            if (lineLen > 0) { haveLine = true; break; }
+            // ligne vide -> ignorer
+        } else if (lineLen < sizeof(lineBuf) - 1) {
+            lineBuf[lineLen++] = c;
+        } else {
+            lineLen = 0;  // débordement : on jette la ligne trop longue
+        }
     }
 
-    // Read JSON from serial
-    DeserializationError error = deserializeJson(rxDoc, bridgeSerial);
+    if (!haveLine) return false;
+    lineBuf[lineLen] = '\0';
+    lineLen = 0;
 
+    DeserializationError error = deserializeJson(rxDoc, lineBuf);
     if (error) {
-        // Clear buffer on error
-        while (bridgeSerial.available()) bridgeSerial.read();
         return false;
     }
-    
+
     // Parse message type
     const char* typeStr = rxDoc["type"];
     if (!typeStr) return false;
@@ -58,6 +96,57 @@ bool SerialProtocol::receive() {
         // Clamp to 0-100
         if (lastCreditPercent > 100) lastCreditPercent = 100;
         creditInfoValid = true;
+        return true;
+    }
+    else if (strcmp(typeStr, "status") == 0) {
+        lastMessageType = MessageType::STATUS;
+        
+        // Parse state
+        const char* stateStr = rxDoc["state"];
+        if (strcmp(stateStr, "thinking") == 0) {
+            lastAgentState = AgentState::THINKING;
+        } else if (strcmp(stateStr, "waiting") == 0) {
+            lastAgentState = AgentState::WAITING;
+        } else if (strcmp(stateStr, "done") == 0) {
+            lastAgentState = AgentState::DONE;
+        } else if (strcmp(stateStr, "error") == 0) {
+            lastAgentState = AgentState::ERROR;
+        } else if (strcmp(stateStr, "dead") == 0) {
+            lastAgentState = AgentState::DEAD;
+        } else if (strcmp(stateStr, "stuck") == 0) {
+            lastAgentState = AgentState::STUCK;
+        } else {
+            lastAgentState = AgentState::DONE;
+        }
+        
+        // Parse detail (optional, max 40 chars)
+        const char* detail = rxDoc["detail"] | "";
+        strlcpy(lastStatusDetail, detail, sizeof(lastStatusDetail));
+        
+        // Parse seq
+        lastStatusSeq = rxDoc["seq"] | 0;
+        statusValid = true;
+        
+        // Parse activity (only valid when state == thinking)
+        const char* activityStr = rxDoc["activity"] | "";
+        if (lastAgentState == AgentState::THINKING) {
+            if (strcmp(activityStr, "reasoning") == 0) {
+                lastThinkingActivity = ThinkingActivity::REASONING;
+            } else if (strcmp(activityStr, "tool_exec") == 0) {
+                lastThinkingActivity = ThinkingActivity::TOOL_EXEC;
+            } else if (strcmp(activityStr, "reading") == 0) {
+                lastThinkingActivity = ThinkingActivity::READING;
+            } else if (strcmp(activityStr, "streaming") == 0) {
+                lastThinkingActivity = ThinkingActivity::STREAMING;
+            } else {
+                // Default to REASONING if unknown or missing
+                lastThinkingActivity = ThinkingActivity::REASONING;
+            }
+            thinkingActivityValid = true;
+        } else {
+            thinkingActivityValid = false;
+        }
+        
         return true;
     }
     
@@ -121,4 +210,28 @@ uint8_t SerialProtocol::getCreditPercent() const {
 
 bool SerialProtocol::hasCreditInfo() const {
     return creditInfoValid;
+}
+
+AgentState SerialProtocol::getAgentState() const {
+    return lastAgentState;
+}
+
+const char* SerialProtocol::getStatusDetail() const {
+    return lastStatusDetail;
+}
+
+uint32_t SerialProtocol::getStatusSeq() const {
+    return lastStatusSeq;
+}
+
+bool SerialProtocol::hasStatus() const {
+    return statusValid;
+}
+
+ThinkingActivity SerialProtocol::getThinkingActivity() const {
+    return lastThinkingActivity;
+}
+
+bool SerialProtocol::hasThinkingActivity() const {
+    return thinkingActivityValid;
 }

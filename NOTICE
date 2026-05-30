@@ -1,0 +1,56 @@
+vibe-m5stack
+Copyright 2026 Romain Delfosse
+
+This project includes the following components:
+
+Core Components (Apache 2.0)
+-----------------------
+- vibe-m5stack plugin (plugin/)
+- Firmware for M5Stack devices (firmware/)
+- Test suite (tests/)
+- Documentation (README.md, PLUGIN_README.md, BRIEF_*.md)
+- Configuration files (pyproject.toml, mcp_config_example.toml)
+
+All original code in this repository is licensed under the Apache License, Version 2.0.
+
+Third-Party Dependencies
+-----------------------
+This project may include or depend on the following third-party libraries, each with their own license:
+
+1. PlatformIO (https://platformio.org/) - Used for firmware development
+   License: Apache 2.0
+
+2. M5Stack Libraries (https://github.com/m5stack/M5Stack-Cardputer) - Hardware abstraction
+   License: MIT or Apache 2.0 (depending on component)
+
+3. FastLED (https://github.com/FastLED/FastLED) - LED control library
+   License: MIT
+
+4. ArduinoJson (https://github.com/bblanchon/ArduinoJson) - JSON parsing
+   License: MIT
+
+5. Python MCP (Model Context Protocol) - For plugin communication
+   License: Apache 2.0
+
+6. Mistral AI Vibe CLI dependencies - For plugin integration
+   License: Varies (see individual packages)
+
+7. WiFiClientSecure - ESP32 WiFi with TLS
+   License: Apache 2.0
+
+8. HTTPClient - ESP32 HTTP client
+   License: Apache 2.0
+
+For complete dependency information, see:
+- firmware/platformio.ini (firmware dependencies)
+- plugin/requirements.txt (Python dependencies)
+- pyproject.toml (Python package dependencies)
+
+The above third-party components are subject to their own copyright notices and license terms, which are included in their respective source files or documentation.
+
+Trademarks
+---------
+M5Stack is a trademark of M5Stack Technology Co., Ltd.
+Mistral AI is a trademark of Mistral AI.
+
+All other trademarks are the property of their respective owners.

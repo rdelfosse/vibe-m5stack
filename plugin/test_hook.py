@@ -1,4 +1,19 @@
 """
+Vibe M5Stack - M5Stack integration for Mistral Vibe CLI
+Copyright 2026 Romain Delfosse
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+""""""
 Test script for the M5Stack approval hook.
 
 This script tests the hook without requiring a physical M5Stack device.
@@ -39,53 +54,55 @@ async def test_callback_with_mock_bridge():
     
     # Patch the global _bridge in the module
     import plugin.vibe_m5stack_hook as hook_module
-    
-    # Test approval
-    hook_module._bridge = Mock()
-    hook_module._bridge.request_approval = mock_request_approval_approved
-    hook_module._bridge.is_connected = True
-    
-    result = await m5stack_approval_callback(
-        tool_name="write_file",
-        args=MockArgs(),
-        tool_call_id="test-123",
-        required_permissions=None
-    )
-    
-    assert result[0] == ApprovalResponse.YES, f"Expected YES, got {result[0]}"
-    assert result[1] is None
-    print("+ Test 1 passed: Callback approves with mock bridge")
-    
-    # Test rejection
-    hook_module._bridge.request_approval = mock_request_approval_rejected
-    
-    result = await m5stack_approval_callback(
-        tool_name="write_file",
-        args=MockArgs(),
-        tool_call_id="test-123",
-        required_permissions=None
-    )
-    
-    assert result[0] == ApprovalResponse.NO, f"Expected NO, got {result[0]}"
-    assert "M5Stack" in result[1]
-    print("+ Test 2 passed: Callback rejects with mock bridge")
-    
-    # Test timeout (bridge returns None)
-    async def mock_request_timeout(title, body, timeout=30.0):
-        return None
-    
-    hook_module._bridge.request_approval = mock_request_timeout
-    
-    result = await m5stack_approval_callback(
-        tool_name="write_file",
-        args=MockArgs(),
-        tool_call_id="test-123",
-        required_permissions=None
-    )
-    
-    assert result[0] == ApprovalResponse.NO, f"Expected NO, got {result[0]}"
-    assert "timeout" in result[1].lower()
-    print("+ Test 3 passed: Callback handles timeout")
+
+    # Force the ephemeral _bridge fallback path (no owner-broker / no hardware).
+    with patch.object(hook_module, "get_or_init_broker", return_value=None):
+        # Test approval
+        hook_module._bridge = Mock()
+        hook_module._bridge.request_approval = mock_request_approval_approved
+        hook_module._bridge.is_connected = lambda: True
+
+        result = await m5stack_approval_callback(
+            tool_name="write_file",
+            args=MockArgs(),
+            tool_call_id="test-123",
+            required_permissions=None
+        )
+
+        assert result[0] == ApprovalResponse.YES, f"Expected YES, got {result[0]}"
+        assert result[1] is None
+        print("+ Test 1 passed: Callback approves with mock bridge")
+
+        # Test rejection
+        hook_module._bridge.request_approval = mock_request_approval_rejected
+
+        result = await m5stack_approval_callback(
+            tool_name="write_file",
+            args=MockArgs(),
+            tool_call_id="test-123",
+            required_permissions=None
+        )
+
+        assert result[0] == ApprovalResponse.NO, f"Expected NO, got {result[0]}"
+        assert "M5Stack" in result[1]
+        print("+ Test 2 passed: Callback rejects with mock bridge")
+
+        # Test timeout (bridge returns None)
+        async def mock_request_timeout(title, body, timeout=30.0):
+            return None
+
+        hook_module._bridge.request_approval = mock_request_timeout
+
+        result = await m5stack_approval_callback(
+            tool_name="write_file",
+            args=MockArgs(),
+            tool_call_id="test-123",
+            required_permissions=None
+        )
+
+        assert result[0] == ApprovalResponse.NO, f"Expected NO, got {result[0]}"
+        assert "timeout" in result[1].lower()
+        print("+ Test 3 passed: Callback handles timeout")
 
 
 async def test_callback_without_bridge():
@@ -95,18 +112,20 @@ async def test_callback_without_bridge():
     
     # Set _bridge to None to trigger initialization
     hook_module._bridge = None
-    
-    # Mock M5StackBridge to raise an error
-    with patch('plugin.vibe_m5stack_hook.M5StackBridge', side_effect=Exception("Port not found")):
+
+    # Force ephemeral fallback (no broker), and make bridge construction fail.
+    with patch.object(hook_module, "get_or_init_broker", return_value=None), \
+         patch('plugin.vibe_m5stack_hook.M5StackBridge', side_effect=Exception("Port not found")):
         result = await m5stack_approval_callback(
             tool_name="write_file",
             args=MockArgs(),
             tool_call_id="test-123",
             required_permissions=None
         )
-    
+
     assert result[0] == ApprovalResponse.NO, f"Expected NO, got {result[0]}"
-    assert "error" in result[1].lower() or "Port not found" in result[1]
+    # On a construction error the callback denies with an "unavailable" message.
+    assert "unavailable" in result[1].lower()
     print("+ Test 4 passed: Callback handles bridge initialization error")
 
 
