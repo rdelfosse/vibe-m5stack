@@ -92,7 +92,7 @@ else
     write_status "Installation de uv..." "$YELLOW"
     
     # Install uv using the official installer
-    curl -fsSL https://astral-sh.github.io/uv/install.sh | sh
+    curl -LsSf https://astral.sh/uv/install.sh | sh
     
     # Verify installation
     if [ -f "$UV_PATH" ]; then

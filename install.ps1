@@ -121,7 +121,7 @@ if (Test-Path $uvPath) {
     Write-Status "Installation de uv..." -Color Yellow
     try {
         # Download uv installer
-        $uvUrl = "https://astral-sh.github.io/uv/install.ps1"
+        $uvUrl = "https://astral.sh/uv/install.ps1"
         $installerPath = "$env:TEMP\uv_install.ps1"
         
         Write-Status "Téléchargement de l'installateur uv..." -Color Yellow
