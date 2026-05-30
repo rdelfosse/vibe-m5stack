@@ -100,47 +100,54 @@ class TestMapEventToStatus:
         """Reset global seq counter before each test."""
         import plugin.vibe_m5stack_hook as hook_module
         hook_module._status_seq = 0
+        hook_module._last_status_activity = ""
     
     def test_tool_call_event_maps_to_thinking(self):
         event = ToolCallEvent(tool_name="write_file")
-        state, detail, seq = map_event_to_status(event)
+        state, detail, seq, activity = map_event_to_status(event)
         assert state == "thinking"
         assert detail == "write_file"
         assert seq == 1
+        assert activity == "tool_exec"
     
     def test_assistant_event_maps_to_thinking(self):
         event = AssistantEvent()
-        state, detail, seq = map_event_to_status(event)
+        state, detail, seq, activity = map_event_to_status(event)
         assert state == "thinking"
         assert detail == ""
         assert seq == 1
+        assert activity == "streaming"
     
     def test_reasoning_event_maps_to_thinking(self):
         event = ReasoningEvent()
-        state, detail, seq = map_event_to_status(event)
+        state, detail, seq, activity = map_event_to_status(event)
         assert state == "thinking"
         assert detail == ""
         assert seq == 1
+        assert activity == "reasoning"
     
     def test_waiting_for_input_event_maps_to_waiting(self):
         event = WaitingForInputEvent()
-        state, detail, seq = map_event_to_status(event)
+        state, detail, seq, activity = map_event_to_status(event)
         assert state == "waiting"
         assert detail == "awaiting input"
         assert seq == 0  # No seq increment
+        assert activity == ""
     
     def test_compact_start_event_maps_to_thinking(self):
         event = CompactStartEvent()
-        state, detail, seq = map_event_to_status(event)
+        state, detail, seq, activity = map_event_to_status(event)
         assert state == "thinking"
         assert detail == "compacting"
         assert seq == 1
+        assert activity == "reasoning"
     
     def test_unknown_event_maps_to_thinking(self):
         event = UserMessageEvent()
-        state, detail, seq = map_event_to_status(event)
+        state, detail, seq, activity = map_event_to_status(event)
         assert state == "thinking"
         assert seq == 0
+        assert activity == "reasoning"
 
 
 class TestStatusSequence:
@@ -158,7 +165,7 @@ class TestStatusSequence:
         ]
         seqs = []
         for event in events:
-            _, _, seq = map_event_to_status(event)
+            _, _, seq, _ = map_event_to_status(event)
             seqs.append(seq)
         assert seqs == [1, 2, 3]
     
@@ -170,9 +177,44 @@ class TestStatusSequence:
         ]
         seqs = []
         for event in events:
-            _, _, seq = map_event_to_status(event)
+            _, _, seq, _ = map_event_to_status(event)
             seqs.append(seq)
         assert seqs == [1, 1, 2]
+
+
+class TestActivityClassification:
+    """Tests for thinking activity classification."""
+    
+    def setup_method(self):
+        import plugin.vibe_m5stack_hook as hook_module
+        hook_module._status_seq = 0
+        hook_module._last_status_activity = ""
+    
+    def test_reading_tools_classified_correctly(self):
+        """Test that reading tools are classified as 'reading' activity."""
+        for tool_name in ["read_file", "read", "grep", "search", "web_fetch", "fetch"]:
+            event = ToolCallEvent(tool_name=tool_name)
+            _, _, _, activity = map_event_to_status(event)
+            assert activity == "reading", f"Tool {tool_name} should be 'reading', got {activity}"
+    
+    def test_exec_tools_classified_correctly(self):
+        """Test that execution tools are classified as 'tool_exec' activity."""
+        for tool_name in ["bash", "write_file", "search_replace", "edit"]:
+            event = ToolCallEvent(tool_name=tool_name)
+            _, _, _, activity = map_event_to_status(event)
+            assert activity == "tool_exec", f"Tool {tool_name} should be 'tool_exec', got {activity}"
+    
+    def test_unknown_tool_defaults_to_tool_exec(self):
+        """Test that unknown tools default to 'tool_exec' activity."""
+        event = ToolCallEvent(tool_name="unknown_tool_xyz")
+        _, _, _, activity = map_event_to_status(event)
+        assert activity == "tool_exec"
+    
+    def test_tool_without_name_defaults_to_tool_exec(self):
+        """Test that tools without name default to 'tool_exec' activity."""
+        event = ToolCallEvent(tool_name="")
+        _, _, _, activity = map_event_to_status(event)
+        assert activity == "tool_exec"
 
 
 @pytest.mark.asyncio

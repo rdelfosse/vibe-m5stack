@@ -375,7 +375,7 @@ class M5StackBridge:
         logger.warning(f"Persistent approval request {request_id} timed out")
         return None
 
-    def send_status(self, state: str, detail: str = "", seq: int = 0) -> bool:
+    def send_status(self, state: str, detail: str = "", seq: int = 0, activity: str = "") -> bool:
         """
         Send agent status to M5Stack (also serves as heartbeat).
         
@@ -383,6 +383,7 @@ class M5StackBridge:
             state: One of "thinking", "waiting", "done", "error"
             detail: Short detail text (max 40 chars)
             seq: Monotonically increasing sequence number
+            activity: Sub-activity for thinking state ("reasoning", "tool_exec", "reading", "streaming")
         
         Returns:
             True if message was sent successfully
@@ -393,6 +394,8 @@ class M5StackBridge:
             "detail": detail[:40],  # Truncate to 40 chars
             "seq": seq
         }
+        if activity and state == "thinking":
+            message["activity"] = activity
         return self.send(message)
     
     def close(self):

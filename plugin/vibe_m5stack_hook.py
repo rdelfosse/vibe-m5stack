@@ -77,6 +77,13 @@ from vibe.core.types import (
 _status_seq = 0
 _last_status_state = "done"
 _last_status_detail = ""
+_last_status_activity = ""
+
+# Tool classification for thinking activity
+READING_TOOLS = {"read_file", "read", "grep", "search", "glob", "ls",
+                 "list_dir", "web_fetch", "fetch", "web_search"}
+EXEC_TOOLS = {"bash", "shell", "run", "write_file", "write",
+              "search_replace", "str_replace", "edit", "apply_patch"}
 
 # Session manager singleton for multi-session support
 _session_mgr = SessionManager()
@@ -85,11 +92,12 @@ _session_mgr = SessionManager()
 
 
 def map_event_to_status(event) -> tuple:
-    """Map Vibe events to agent states."""
+    """Map Vibe events to agent states and activities."""
     global _status_seq
     
     state = "thinking"
     detail = ""
+    activity = "reasoning"  # Default activity for thinking state
     seq_increment = False
     
     event_type = type(event).__name__
@@ -102,21 +110,51 @@ def map_event_to_status(event) -> tuple:
         tool_name = getattr(event, "tool_name", None)
         detail = str(tool_name)[:40] if tool_name else ""
         seq_increment = True
+        
+        # Determine activity based on event type and tool name
+        if event_type == "ReasoningEvent":
+            activity = "reasoning"
+        elif event_type == "AssistantEvent":
+            activity = "streaming"
+        elif event_type == "ToolStreamEvent":
+            # Keep the current activity (streaming of tool output)
+            # We'll use the stored activity from ToolCallEvent
+            activity = _last_status_activity if _last_status_activity else "reasoning"
+        elif event_type == "ToolCallEvent":
+            # Classify tool as reading or exec
+            if tool_name and tool_name in READING_TOOLS:
+                activity = "reading"
+            elif tool_name and tool_name in EXEC_TOOLS:
+                activity = "tool_exec"
+            else:
+                # Default to tool_exec for unknown tools
+                activity = "tool_exec"
     elif event_type == "WaitingForInputEvent":
         state = "waiting"
         detail = "awaiting input"
+        activity = ""  # Not applicable for waiting state
     elif event_type == "CompactStartEvent":
         state = "thinking"
         detail = "compacting"
+        activity = "reasoning"
         seq_increment = True
     elif event_type in ("CompactEndEvent", "SessionTitleUpdatedEvent", "PlanReviewRequestedEvent"):
         state = "thinking"
+        activity = "reasoning"
+        seq_increment = True
+    elif event_type == "ToolResultEvent":
+        state = "thinking"
+        activity = "reasoning"
         seq_increment = True
     
     if seq_increment:
         _status_seq += 1
     
-    return state, detail, _status_seq
+    # Store activity for ToolStreamEvent to reference
+    if activity:
+        _last_status_activity = activity
+    
+    return state, detail, _status_seq, activity
 
 
 # Owner-broker manager (lazily initialized on first use).
@@ -176,31 +214,34 @@ def _broker_can_approve(mgr) -> bool:
 
 
 _last_push_state = None
+_last_push_activity = None
 _last_push_monotonic = 0.0
-_PUSH_THROTTLE_S = 0.25  # min interval between same-state pushes
+_PUSH_THROTTLE_S = 0.25  # min interval between same-state+activity pushes
 
 
-def push_status_to_device(state: str, detail: str = "", seq: int = 0) -> bool:
+def push_status_to_device(state: str, detail: str = "", seq: int = 0, activity: str = "") -> bool:
     """Push agent status to the M5Stack via the owner-broker (best-effort).
 
     Streaming events (assistant/tool chunks) can fire hundreds of times per turn;
-    we throttle same-state pushes so we don't saturate the (BT) serial link.
+    we throttle same-state+activity pushes so we don't saturate the (BT) serial link.
     State transitions always go through immediately.
     """
-    global _last_push_state, _last_push_monotonic
+    global _last_push_state, _last_push_activity, _last_push_monotonic
     import time
 
     now = time.monotonic()
-    if state == _last_push_state and (now - _last_push_monotonic) < _PUSH_THROTTLE_S:
+    # Throttle based on (state, activity) tuple - only throttle if both are the same
+    if state == _last_push_state and activity == _last_push_activity and (now - _last_push_monotonic) < _PUSH_THROTTLE_S:
         return True
     _last_push_state = state
+    _last_push_activity = activity
     _last_push_monotonic = now
 
     mgr = get_or_init_broker()
     if mgr is None:
         return False
     try:
-        return mgr.push_status(state, detail, seq)
+        return mgr.push_status(state, detail, seq, activity)
     except Exception as e:
         logger.error(f"Failed to push status: {e}")
         return False
@@ -397,17 +438,18 @@ def patch_act_for_status():
     
     async def patched_act(self, msg, *args, **kwargs):
         """Wrapped act that observes events and pushes status."""
-        global _status_seq
+        global _status_seq, _last_status_activity
         
         # Push thinking state at start of turn
-        push_status_to_device("thinking", "", 0)
+        push_status_to_device("thinking", "", 0, "reasoning")
         _status_seq = 0  # Reset seq for new turn
+        _last_status_activity = "reasoning"
         
         try:
             async for ev in _orig_act(self, msg, *args, **kwargs):
                 # Map event to status and push
-                state, detail, seq = map_event_to_status(ev)
-                push_status_to_device(state, detail, seq)
+                state, detail, seq, activity = map_event_to_status(ev)
+                push_status_to_device(state, detail, seq, activity)
                 yield ev
             
             # Push done state at end of turn

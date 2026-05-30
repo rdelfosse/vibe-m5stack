@@ -50,6 +50,9 @@ bool statusInitialized = false; // Has first status been received?
 // LED state tracking for transitions
 bool ledFlourishDone = true;    // Has the DONE flourish been shown?
 
+// Thinking activity tracking
+ThinkingActivity currentThinkingActivity = ThinkingActivity::REASONING;
+
 void setup() {
     M5.begin();
 
@@ -139,6 +142,11 @@ void loop() {
                 statusInitialized = true;
             }
             
+            // Update thinking activity when available
+            if (serialProtocol.hasThinkingActivity()) {
+                currentThinkingActivity = serialProtocol.getThinkingActivity();
+            }
+            
             // Map agent state to app state (unless approval is active)
             if (currentState != AppState::SHOWING_REQUEST) {
                 prevState = currentState;
@@ -207,7 +215,7 @@ void loop() {
         case AppState::THINKING: {
             animator.update();
             animator.draw();
-            led::setAgentState(AgentState::THINKING);
+            led::setAgentState(AgentState::THINKING, false, currentThinkingActivity);
             break;
         }
         

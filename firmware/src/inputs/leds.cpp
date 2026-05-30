@@ -24,13 +24,34 @@ namespace led {
 
 // --- Hardware layout ---------------------------------------------------------
 // M5Stack Fire side ring : 10 WS2812B on GPIO 15 (5 LEDs per side).
-// Port B (NeoPixel, 38)   : GPIO 26.
+// Port B (NeoPixel, NeoHEX 37) : GPIO 26.
 // Port C                  : GPIO 17 (réservé PSRAM, désactivé — voir begin()).
 static constexpr int RING_LEDS    = 10;
 static constexpr int RING_PIN     = 15;
-static constexpr int MATRIX_LEDS  = 38;
+static constexpr int MATRIX_LEDS  = 37;  // NeoHEX has 37 LEDs, not 38
 static constexpr int MATRIX_B_PIN = 26;
 static constexpr int MATRIX_C_PIN = 17;
+
+// --- NeoHEX Geometry (37 LEDs, 0-based indexing) -----------------------------
+// Concentric rings: 1 + 6 + 12 + 18 = 37
+static constexpr uint8_t RINGS = 4;      // 0 = centre, 1-3 = rings
+static constexpr uint8_t CENTER_LED = 18; // LED centrale (index 0-based)
+
+// Ring of each LED (index 0..36 in wiring order by rows)
+static const uint8_t RING_OF[MATRIX_LEDS] = {
+    3,3,3,3,          // rangée 0 (idx 0..3)
+    3,2,2,2,3,        // rangée 1 (idx 4..8)
+    3,2,1,1,2,3,      // rangée 2 (idx 9..14)
+    3,2,1,0,1,2,3,    // rangée 3 (idx 15..21)  -> idx 18 = centre
+    3,2,1,1,2,3,      // rangée 4 (idx 22..27)
+    3,2,2,2,3,        // rangée 5 (idx 28..32)
+    3,3,3,3           // rangée 6 (idx 33..36)
+};
+
+// Outer ring (ring 3, 18 LEDs) in clockwise angular order, starting from top-left
+static const uint8_t OUTER_RING_CW[18] = {
+    0,1,2,3, 8,14,21,27,32, 36,35,34,33, 28,22,15,9,4
+};
 
 // Mistral palette (matches the logo SVG).
 static const CRGB MISTRAL_PALETTE[5] = {
@@ -52,6 +73,11 @@ static const CRGB COLOR_DONE     = CRGB(0, 200, 0);
 static const CRGB COLOR_DONE_FLOURISH = CRGB(0, 255, 0);
 static const CRGB COLOR_ERROR    = CRGB(255, 0, 0);
 
+// Thinking activity colors
+static const CRGB COLOR_THINK_CYAN    = CRGB(0, 180, 255);
+static const CRGB COLOR_THINK_BLUE    = CRGB(0, 90, 255);
+static const CRGB COLOR_THINK_VIOLET  = CRGB(150, 0, 255);
+
 // --- LED buffers (static, zero-init in .bss) --------------------------------
 static CRGB ring[RING_LEDS];
 static CRGB matrixB[MATRIX_LEDS];
@@ -65,9 +91,30 @@ static uint8_t  matrixColorIdx   = 0;
 
 // --- Agent state tracking --------------------------------------------------
 static AgentState currentAgentState = AgentState::DONE;
+static ThinkingActivity currentThinkingActivity = ThinkingActivity::REASONING;
 static bool flourishActive = false;
 static uint32_t flourishStartMs = 0;
 static constexpr uint32_t FLOURISH_DURATION_MS = 1500;
+
+// --- Thinking animation state ----------------------------------------------
+// Sparkle (REASONING)
+static uint32_t lastSparkleMs = 0;
+
+// Ripple (TOOL_EXEC)
+static uint32_t lastRippleMs = 0;
+static uint8_t rippleRadius = 0;  // 0 to RINGS-1
+static constexpr uint32_t RIPPLE_PERIOD_MS = 700;
+
+// Radar (READING)
+static uint32_t lastRadarMs = 0;
+static uint8_t radarHead = 0;     // position in OUTER_RING_CW
+static constexpr uint32_t RADAR_STEP_MS = 60;
+
+// Fill (STREAMING)
+static uint32_t lastFillMs = 0;
+static uint8_t fillLevel = 0;     // 0 to RINGS (then resets)
+static bool fillFilling = true;   // true = filling, false = emptying
+static constexpr uint32_t FILL_PERIOD_MS = 900;
 
 // --- Blinking state for ERROR/DEAD/STUCK -------------------------------------
 static uint32_t lastBlinkMs = 0;
@@ -107,6 +154,118 @@ static void scanner(CRGB* buf, int count, int& pos, int& dir, const CRGB& color,
     pos += dir;
     if (pos >= count - 1) { pos = count - 1; dir = -1; }
     else if (pos <= 0)    { pos = 0;         dir = 1; }
+}
+
+// --- Thinking animation helpers --------------------------------------------
+
+// Sparkle: random LEDs twinkle and fade (REASONING)
+static void animSparkle(uint32_t now) {
+    if (now - lastSparkleMs > 80) {
+        lastSparkleMs = now;
+        // Fade all LEDs
+        fadeToBlackBy(matrixB, MATRIX_LEDS, 40);
+        // Light 1-2 random LEDs in cyan at random brightness
+        int num = random8(2) + 1; // 1 or 2 LEDs
+        for (int i = 0; i < num; i++) {
+            uint8_t idx = random8(MATRIX_LEDS);
+            uint8_t brightness = random8(128, 255);
+            matrixB[idx] = COLOR_THINK_CYAN;
+            matrixB[idx] %= brightness;
+        }
+    }
+}
+
+// Ripple: radial wave from center to outer ring (TOOL_EXEC)
+static void animRipple(uint32_t now) {
+    if (now - lastRippleMs > 20) {
+        lastRippleMs = now;
+        
+        // Calculate radius based on time
+        uint32_t periodElapsed = now % RIPPLE_PERIOD_MS;
+        rippleRadius = map(periodElapsed, 0, RIPPLE_PERIOD_MS, 0, RINGS * 255);
+        rippleRadius /= 255;
+        if (rippleRadius >= RINGS) rippleRadius = RINGS - 1;
+        
+        // For each LED, brightness based on distance from ripple radius
+        for (int i = 0; i < MATRIX_LEDS; i++) {
+            uint8_t ring = RING_OF[i];
+            int8_t dist = abs((int8_t)ring - (int8_t)rippleRadius);
+            // Brightness: peak at rippleRadius, falloff on neighbors
+            uint8_t brightness = 255 - (dist * 85);
+            if (brightness > 255) brightness = 255;
+            
+            matrixB[i] = COLOR_THINK_BLUE;
+            matrixB[i] %= brightness;
+        }
+    }
+}
+
+// Radar: rotating point on outer ring with trail (READING)
+static void animRadar(uint32_t now) {
+    if (now - lastRadarMs > RADAR_STEP_MS) {
+        lastRadarMs = now;
+        
+        // Fade the outer ring by applying fade to all LEDs
+        for (int i = 0; i < MATRIX_LEDS; i++) {
+            if (RING_OF[i] == 3) { // Only outer ring
+                matrixB[i].fadeToBlackBy(64);
+            }
+        }
+        
+        // Advance head and light it
+        radarHead = (radarHead + 1) % 18;
+        uint8_t headIdx = OUTER_RING_CW[radarHead];
+        matrixB[headIdx] = COLOR_THINK_CYAN;
+        
+        // Light a few LEDs behind with violet for trail
+        for (int i = 1; i <= 2; i++) {
+            uint8_t trailPos = (radarHead - i + 18) % 18;
+            uint8_t trailIdx = OUTER_RING_CW[trailPos];
+            matrixB[trailIdx] = COLOR_THINK_VIOLET;
+            matrixB[trailIdx] %= 128;
+        }
+        
+        // Inner rings: dim cyan base
+        for (int i = 0; i < MATRIX_LEDS; i++) {
+            if (RING_OF[i] < 3) { // Rings 0, 1, 2
+                matrixB[i] = COLOR_THINK_CYAN;
+                matrixB[i] %= 32;
+            }
+        }
+    }
+}
+
+// Fill: progressive fill from center to outer, then empty (STREAMING)
+static void animFill(uint32_t now) {
+    if (now - lastFillMs > 20) {
+        lastFillMs = now;
+        
+        // Calculate fill level based on time
+        uint32_t periodElapsed = now % FILL_PERIOD_MS;
+        fillLevel = map(periodElapsed, 0, FILL_PERIOD_MS, 0, RINGS * 255);
+        fillLevel /= 255;
+        if (fillLevel >= RINGS) {
+            fillLevel = RINGS - 1;
+        }
+        
+        // Fill all LEDs in rings <= fillLevel
+        for (int i = 0; i < MATRIX_LEDS; i++) {
+            uint8_t ring = RING_OF[i];
+            if (ring <= fillLevel) {
+                // Filled: interpolate from blue to cyan based on ring
+                uint8_t blend = map(ring, 0, RINGS - 1, 0, 255);
+                // Manual linear interpolation
+                uint8_t r = map(blend, 0, 255, COLOR_THINK_BLUE.r, COLOR_THINK_CYAN.r);
+                uint8_t g = map(blend, 0, 255, COLOR_THINK_BLUE.g, COLOR_THINK_CYAN.g);
+                uint8_t b = map(blend, 0, 255, COLOR_THINK_BLUE.b, COLOR_THINK_CYAN.b);
+                matrixB[i] = CRGB(r, g, b);
+                matrixB[i] %= 200;
+            } else {
+                // Not filled: off
+                matrixB[i] = CRGB::Black;
+            }
+        }
+    }
 }
 
 // --- Public API -------------------------------------------------------------
@@ -155,9 +314,10 @@ void updateApprovalAnimation() {
     if (changed) FastLED.show();
 }
 
-void setAgentState(AgentState state, bool flourish) {
+void setAgentState(AgentState state, bool flourish, ThinkingActivity activity) {
     const uint32_t now = millis();
     currentAgentState = state;
+    currentThinkingActivity = activity;
 
     if (state == AgentState::DONE && flourish) {
         flourishActive = true;
@@ -169,14 +329,27 @@ void setAgentState(AgentState state, bool flourish) {
 
     switch (state) {
         case AgentState::THINKING: {
-            // Ring: bleu qui respire. Matrix: comète bleue qui défile.
+            // Ring: bleu qui respire (unchanged from original)
             static uint8_t pulse = 80; static bool up = true; static uint32_t lastP = 0;
             if (now - lastP > 30) { lastP = now; breathe(pulse, up, 8, 40, 210); }
             CRGB rc = COLOR_THINKING; rc %= pulse;
             fill_solid(ring, RING_LEDS, rc);
 
-            static uint32_t lastC = 0; static uint8_t head = 0;
-            if (now - lastC > 45) { lastC = now; comet(matrixB, MATRIX_LEDS, head, COLOR_THINKING, 60); }
+            // Matrix B: dispatch based on activity
+            switch (activity) {
+                case ThinkingActivity::REASONING:
+                    animSparkle(now);
+                    break;
+                case ThinkingActivity::TOOL_EXEC:
+                    animRipple(now);
+                    break;
+                case ThinkingActivity::READING:
+                    animRadar(now);
+                    break;
+                case ThinkingActivity::STREAMING:
+                    animFill(now);
+                    break;
+            }
             FastLED.show();
             break;
         }

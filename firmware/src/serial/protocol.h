@@ -26,6 +26,14 @@ enum class AgentState {
     STUCK          // Agent stuck (generating forever)
 };
 
+// Thinking activities (sub-states of THINKING)
+enum class ThinkingActivity {
+    REASONING,     // Model is reasoning, no active tool
+    TOOL_EXEC,     // Tool execution in progress (bash, write, edit, etc.)
+    READING,       // Reading/searching data (read, grep, fetch, etc.)
+    STREAMING      // Model response being streamed
+};
+
 // Message types
 enum class MessageType {
     INVALID,
@@ -91,6 +99,10 @@ public:
     const char* getStatusDetail() const;
     uint32_t getStatusSeq() const;
     bool hasStatus() const;
+
+    // Get thinking activity info
+    ThinkingActivity getThinkingActivity() const;
+    bool hasThinkingActivity() const;
     
 private:
     StaticJsonDocument<JSON_RX_SIZE> rxDoc;
@@ -109,4 +121,8 @@ private:
     char lastStatusDetail[41];  // max 40 chars + null terminator
     uint32_t lastStatusSeq;
     bool statusValid;
+
+    // Thinking activity field
+    ThinkingActivity lastThinkingActivity;
+    bool thinkingActivityValid;
 };

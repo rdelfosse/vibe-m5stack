@@ -24,7 +24,9 @@ SerialProtocol::SerialProtocol()
       newMessageAvailable(false),
       lastAgentState(AgentState::DONE),
       lastStatusSeq(0),
-      statusValid(false) {
+      statusValid(false),
+      lastThinkingActivity(ThinkingActivity::REASONING),
+      thinkingActivityValid(false) {
     lastTitle[0] = '\0';
     lastBody[0] = '\0';
     lastStatusDetail[0] = '\0';
@@ -107,6 +109,26 @@ bool SerialProtocol::receive() {
         lastStatusSeq = rxDoc["seq"] | 0;
         statusValid = true;
         
+        // Parse activity (only valid when state == thinking)
+        const char* activityStr = rxDoc["activity"] | "";
+        if (lastAgentState == AgentState::THINKING) {
+            if (strcmp(activityStr, "reasoning") == 0) {
+                lastThinkingActivity = ThinkingActivity::REASONING;
+            } else if (strcmp(activityStr, "tool_exec") == 0) {
+                lastThinkingActivity = ThinkingActivity::TOOL_EXEC;
+            } else if (strcmp(activityStr, "reading") == 0) {
+                lastThinkingActivity = ThinkingActivity::READING;
+            } else if (strcmp(activityStr, "streaming") == 0) {
+                lastThinkingActivity = ThinkingActivity::STREAMING;
+            } else {
+                // Default to REASONING if unknown or missing
+                lastThinkingActivity = ThinkingActivity::REASONING;
+            }
+            thinkingActivityValid = true;
+        } else {
+            thinkingActivityValid = false;
+        }
+        
         return true;
     }
     
@@ -186,4 +208,12 @@ uint32_t SerialProtocol::getStatusSeq() const {
 
 bool SerialProtocol::hasStatus() const {
     return statusValid;
+}
+
+ThinkingActivity SerialProtocol::getThinkingActivity() const {
+    return lastThinkingActivity;
+}
+
+bool SerialProtocol::hasThinkingActivity() const {
+    return thinkingActivityValid;
 }

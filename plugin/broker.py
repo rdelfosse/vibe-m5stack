@@ -259,17 +259,20 @@ class OwnerBroker:
         states = {s: info['state'] for s, info in self.session_states.items()}
         new_state = aggregate_states(states)
         
-        # Find the most recent seq
+        # Find the most recent seq and corresponding activity
         max_seq = 0
         best_detail = ""
+        best_activity = ""
         for info in self.session_states.values():
             if info['seq'] > max_seq:
                 max_seq = info['seq']
                 best_detail = info['detail']
+                best_activity = info.get('activity', '')
         
         self.aggregated_state = new_state
         self.aggregated_detail = best_detail
         self.aggregated_seq = max_seq
+        self.aggregated_activity = best_activity
         
         # Send aggregated status to device
         self._send_aggregated_status()
@@ -281,13 +284,17 @@ class OwnerBroker:
         if self.approval_active:
             return
         try:
-            self.bridge.send({
+            msg = {
                 "type": "status",
                 "state": self.aggregated_state,
                 "detail": self.aggregated_detail[:40],
                 "seq": self.aggregated_seq
-            })
-            logger.debug(f"Sent aggregated status: {self.aggregated_state} (seq={self.aggregated_seq})")
+            }
+            # Only include activity for thinking state
+            if self.aggregated_state == "thinking" and self.aggregated_activity:
+                msg["activity"] = self.aggregated_activity
+            self.bridge.send(msg)
+            logger.debug(f"Sent aggregated status: {self.aggregated_state} (seq={self.aggregated_seq}, activity={self.aggregated_activity})")
         except Exception as e:
             logger.error(f"Failed to send aggregated status: {e}")
     
@@ -315,13 +322,14 @@ class OwnerBroker:
         finally:
             self.approval_active = False
 
-    def push_status(self, state: str, detail: str = "", seq: int = 0, session: str = "owner"):
+    def push_status(self, state: str, detail: str = "", seq: int = 0, activity: str = "", session: str = "owner"):
         """Push status for this owner session."""
         with self.lock:
             self.session_states[session] = {
                 'state': state,
                 'detail': detail,
-                'seq': seq
+                'seq': seq,
+                'activity': activity
             }
             self._update_aggregated_state()
     
@@ -481,7 +489,7 @@ class ClientProxy:
         
         return None
     
-    def push_status(self, state: str, detail: str = "", seq: int = 0) -> bool:
+    def push_status(self, state: str, detail: str = "", seq: int = 0, activity: str = "") -> bool:
         """Push status to owner (synchronous wrapper)."""
         import asyncio
         msg = {
@@ -490,6 +498,8 @@ class ClientProxy:
             "detail": detail,
             "seq": seq
         }
+        if activity:
+            msg["activity"] = activity
         
         # Run async in new event loop if needed
         try:
@@ -512,6 +522,9 @@ class ClientProxy:
         """Async helper for push_status."""
         msg = msg.copy()
         msg['session'] = self.session_name
+        # Ensure activity is included if present
+        if 'activity' in msg:
+            msg['activity'] = msg['activity']
         return await self.send_message(msg)
     
     def close(self):
@@ -592,16 +605,16 @@ class BrokerManager:
     def is_client(self) -> bool:
         return self.role == 'client'
     
-    def push_status(self, state: str, detail: str = "", seq: int = 0) -> bool:
+    def push_status(self, state: str, detail: str = "", seq: int = 0, activity: str = "") -> bool:
         """Push status to device (routed to broker or directly)."""
         if not self._initialized:
             self.initialize()
         
         if self.is_owner() and self.broker:
-            self.broker.push_status(state, detail, seq, self.session_name)
+            self.broker.push_status(state, detail, seq, activity, self.session_name)
             return True
         elif self.is_client() and self.client:
-            return self.client.push_status(state, detail, seq)
+            return self.client.push_status(state, detail, seq, activity)
         return False
     
     async def request_approval(self, title: str, body: str, request_id: int) -> Optional[Dict[str, Any]]:
