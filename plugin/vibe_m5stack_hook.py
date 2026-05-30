@@ -40,6 +40,7 @@ from typing import Any
 from pydantic import BaseModel
 
 # Setup logging to file only - NO stderr to avoid TUI pollution
+from plugin import config
 _log_dir = Path.home() / ".vibe" / "logs"
 _log_dir.mkdir(parents=True, exist_ok=True)
 _handler = logging.FileHandler(_log_dir / "m5stack_hook.log", encoding="utf-8")
@@ -179,7 +180,7 @@ def get_or_init_broker():
         import atexit
         from plugin.broker import BrokerManager
 
-        port = os.environ.get("M5STACK_PORT")
+        port = config.resolve_port()
         raw_bridge = M5StackBridge(port=port, auto_connect=False)
         session = _session_mgr.session_name or "default"
         mgr = BrokerManager(raw_bridge, session)
@@ -388,7 +389,7 @@ async def m5stack_approval_callback(
         # Fallback: ephemeral bridge (no broker / device unreachable via broker).
         if _bridge is None:
             try:
-                port = os.environ.get("M5STACK_PORT")
+                port = config.resolve_port()
                 raw_bridge = M5StackBridge(port=port, auto_connect=False)
                 _bridge = ThreadSafeM5StackBridge(raw_bridge)
                 if raw_bridge.is_connected:

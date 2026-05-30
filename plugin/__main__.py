@@ -52,10 +52,14 @@ def main():
 
     # Load the hook - this monkey-patches AgentLoop
     import plugin.vibe_m5stack_hook
+    from plugin import config
 
-    # Check M5STACK_PORT for user feedback (before TUI takes over stderr)
-    if not os.environ.get("M5STACK_PORT"):
-        print("[m5stack] M5STACK_PORT not set, auto-detecting...", file=sys.stderr)
+    # Check port resolution for user feedback (before TUI takes over stderr)
+    resolved_port = config.resolve_port()
+    if not resolved_port:
+        print("[m5stack] No port resolved, auto-detecting...", file=sys.stderr)
+    else:
+        print(f"[m5stack] Port resolved: {resolved_port}", file=sys.stderr)
 
     # Now run Vibe CLI with the patched classes
     # Reconstruct sys.argv for Vibe: replace 'python -m plugin' with 'vibe'

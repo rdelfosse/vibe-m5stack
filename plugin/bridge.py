@@ -32,11 +32,34 @@ from queue import Queue, Empty
 
 from filelock import FileLock, Timeout
 
+# Lazy import to avoid circular dependency
+_config_module = None
+
 logger = logging.getLogger(__name__)
 
 # Global lock file for multi-session coordination
 _LOCK_PATH = Path.home() / ".vibe" / "m5stack.lock"
 _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _get_config_module():
+    """Lazy import of config module to avoid circular dependency."""
+    global _config_module
+    if _config_module is None:
+        from plugin import config
+        _config_module = config
+    return _config_module
+
+
+def resolve_port() -> Optional[str]:
+    """
+    Resolve the M5Stack port using config module with precedence:
+    1. M5STACK_PORT environment variable
+    2. config.toml [device] port
+    3. Auto-detection
+    """
+    config = _get_config_module()
+    return config.resolve_port()
 
 
 class M5StackBridge:
@@ -92,9 +115,10 @@ class M5StackBridge:
         if port:
             self.port = port
         elif not self.port:
-            self.port = self._auto_detect_port()
+            # Use config-based port resolution with precedence: env > config > auto-detect
+            self.port = resolve_port()
             if not self.port:
-                logger.error("M5Stack device not found. Please connect via USB.")
+                logger.error("M5Stack device not found. Please connect via USB or set M5STACK_PORT.")
                 return False
         
         try:
@@ -117,16 +141,17 @@ class M5StackBridge:
             self.serial_conn = None
             return False
     
-    def _probe_port(self, port_name: str, timeout: float = 1.0) -> bool:
+    def _probe_port(self, port_name: str, timeout: float = 6.0) -> bool:
         """
         Probe a serial port to check if it's an M5Stack device.
         
         Opens the port and listens for JSON messages with a "type" key.
         Our firmware sends {"type":"ping"} every 5 seconds in IDLE mode.
+        Timeout increased to 6s to reliably catch the ping.
         
         Args:
             port_name: Name of the port to probe
-            timeout: Maximum time to wait for a valid message
+            timeout: Maximum time to wait for a valid message (default: 6.0s)
             
         Returns:
             True if the port responds with valid M5Stack JSON, False otherwise
