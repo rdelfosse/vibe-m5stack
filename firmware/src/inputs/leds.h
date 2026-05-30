@@ -15,7 +15,6 @@
 #pragma once
 
 #include "../serial/protocol.h"
-#include <FastLED.h>
 
 // Public LED API. Implementation is fully isolated in leds.cpp so that
 // FastLED's headers (which use `RED`/`BLACK` as enum identifiers) never
