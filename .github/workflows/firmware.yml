@@ -171,12 +171,18 @@ jobs:
       url: https://rdelfosse.github.io/vibe-m5stack/flash/firmware-merged.bin
     
     steps:
+      - name: Checkout repository
+        # Indispensable : sans checkout, le workspace ne contient pas docs/
+        # (index.html, vendor/esp-web-tools, ...) et le déploiement Pages ne
+        # publierait que les binaires -> page du web flasher en 404.
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           name: firmware-binaries
           path: firmware/bin/
-      
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
