@@ -56,21 +56,35 @@ def _read_toml_file(path: Path) -> dict:
             return {}
 
 
+def _dump_toml(data: dict) -> str:
+    """Dump a dict to TOML format string (simple writer, no dependencies)."""
+    lines = []
+    for section, kv in data.items():
+        lines.append(f"[{section}]")
+        for k, v in kv.items():
+            if isinstance(v, str):
+                # Escape backslashes and quotes
+                esc = v.replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(f'{k} = "{esc}"')
+            elif isinstance(v, bool):
+                lines.append(f"{k} = {'true' if v else 'false'}")
+            elif isinstance(v, (int, float)):
+                lines.append(f"{k} = {v}")
+            elif v is None:
+                lines.append(f"{k} = ")
+            else:
+                # Fallback: use repr for other types
+                lines.append(f'{k} = {repr(v)}')
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _write_toml_file(path: Path, data: dict) -> None:
-    """Write a TOML file. Uses tomli-w if available, otherwise toml."""
-    try:
-        import tomli_w
-        with open(path, "wb") as f:
-            tomli_w.dump(data, f)
-    except (ImportError, ModuleNotFoundError):
-        try:
-            import toml
-            with open(path, "w", encoding="utf-8") as f:
-                toml.dump(data, f)
-        except (ImportError, ModuleNotFoundError):
-            raise RuntimeError(
-                "No TOML writer available. Please install tomli-w or toml: pip install tomli-w"
-            )
+    """Write a TOML file. Uses built-in simple TOML writer (no dependencies)."""
+    _ensure_config_dir()
+    toml_str = _dump_toml(data)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(toml_str)
 
 
 def load_config() -> dict:

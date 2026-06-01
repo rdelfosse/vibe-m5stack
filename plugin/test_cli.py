@@ -295,7 +295,7 @@ class TestSetupCommand:
         
         with patch('plugin.cli.check_pyserial', return_value=(True, "pyserial trouvé")):
             with patch('plugin.cli.list_serial_ports', return_value=[mock_port]):
-                with patch('plugin.cli.check_firmware_responds', return_value=(True, "Firmware OK")):
+                with patch('plugin.cli.check_firmware_responds', return_value=(True, "Firmware OK", "0.2.0")):
                     with patch('plugin.cli.input', return_value='1'):
                         with patch('plugin.cli.config.save_detected_port') as mock_save:
                             exit_code = cmd_setup()
@@ -312,7 +312,7 @@ class TestSetupCommand:
         
         with patch('plugin.cli.check_pyserial', return_value=(True, "pyserial trouvé")):
             with patch('plugin.cli.list_serial_ports', return_value=[mock_port]):
-                with patch('plugin.cli.check_firmware_responds', return_value=(True, "Firmware OK")):
+                with patch('plugin.cli.check_firmware_responds', return_value=(True, "Firmware OK", "0.2.0")):
                     with patch('plugin.cli.input', return_value='1'):
                         exit_code = cmd_setup()
                         assert exit_code == 0

@@ -433,7 +433,7 @@ def cmd_setup() -> int:
     
     # Test the port by trying to connect and check for firmware response
     print(f"\nTest de la connexion sur {selected_port}...")
-    firmware_ok, firmware_msg = check_firmware_responds(selected_port)
+    firmware_ok, firmware_msg, _fw_version = check_firmware_responds(selected_port)
     print_status("✓" if firmware_ok else "⚠", firmware_msg, "success" if firmware_ok else "warning")
     
     # Save to config
