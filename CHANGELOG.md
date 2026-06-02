@@ -9,6 +9,16 @@ En pré-1.0, la version *minor* (0.X.0) est incrémentée pour les nouvelles fon
 et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
+## [0.3.0] - 2026-06-02
+
+### Ajoute
+- Ecrans daccueil (welcome screen) affiche du boot jusquau premier message status
+- Nouveau etat AppState::WELCOME avec transition automatique
+- Affichage LCD: titre, auteur, version, tagline, hint, chat + QR code
+- QR code scannable vers https://www.romaindelfosse.fr/blog/m5stack-vibe-bouton-physique-agents-ia/
+- Animation LED led::welcome(): NeoHEX blanc qui respire + anneau lateral
+
+
 
 ## [0.2.0] - 2026-05-30
 

@@ -39,5 +39,7 @@ void setAgentState(AgentState state, bool flourish = false, ThinkingActivity act
 // Idle animation (no agent activity yet): gentle green breathing.
 // Self-throttling; safe to call every loop tick.
 void idle();
+// Welcome animation: white breathing on NeoHEX + side ring
+void welcome();
 
 }  // namespace led

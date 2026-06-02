@@ -382,4 +382,17 @@ void idle() {
     }
 }
 
+void welcome() {
+    const uint32_t now = millis();
+    static uint8_t pulse = 100; static bool up = true; static uint32_t lastP = 0;
+    if (now - lastP  {
+        lastP = now;
+        breathe(pulse, up, 5, 50, 200);
+        CRGB c = CRGB::White; c %= pulse;
+        fill_solid(ring, RING_LEDS, c);
+        fill_solid(matrixB, MATRIX_LEDS, c);
+        FastLED.show();
+    }
+}
+
 }  // namespace led

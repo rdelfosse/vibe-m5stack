@@ -15,6 +15,7 @@
 #include <M5Stack.h>
 #include "display/anim.h"
 #include "display/screen.h"
+#include "display/welcome.h"
 #include "inputs/buttons.h"
 #include "inputs/leds.h"
 #include "serial/protocol.h"
@@ -27,6 +28,7 @@
 
 // Application states
 enum class AppState {
+    WELCOME,        // Welcome screen (boot until first status)
     IDLE,           // Waiting for approval request (show dancing logo)
     SHOWING_REQUEST, // Displaying an approval request
     THINKING,       // Agent is generating/executing
@@ -37,8 +39,8 @@ enum class AppState {
     STUCK           // Agent stuck (generating forever)
 };
 
-AppState currentState = AppState::IDLE;
-AppState prevState = AppState::IDLE;
+AppState currentState = AppState::WELCOME;
+AppState prevState = AppState::WELCOME;
 ChatAnimator animator;
 ApprovalScreen approvalScreen;
 ButtonManager buttonManager;
@@ -261,6 +263,14 @@ void loop() {
 
     // State machine
     switch (currentState) {
+        case AppState::WELCOME: {
+            if (justEntered) {
+                drawWelcomeScreen();
+            }
+            led::welcome();
+            break;
+        }
+
         case AppState::IDLE: {
             drawCatBanner(now, justEntered);
             led::idle();
