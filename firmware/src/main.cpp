@@ -268,6 +268,14 @@ void loop() {
                 drawWelcomeScreen();
             }
             led::welcome();
+
+            // Ping périodique : WELCOME est l'état « device allumé, en attente de
+            // session » — c'est exactement quand le PC sonde le port (auto-détect,
+            // doctor, setup). Sans ça, le device serait indétectable au boot.
+            if (::millis() - lastPingTime > 5000) {
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\"}\n", FW_VERSION);
+                lastPingTime = ::millis();
+            }
             break;
         }
 
