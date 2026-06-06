@@ -15,6 +15,7 @@
 #include <M5Stack.h>
 #include "display/anim.h"
 #include "display/screen.h"
+#include "display/welcome.h"
 #include "inputs/buttons.h"
 #include "inputs/leds.h"
 #include "serial/protocol.h"
@@ -27,6 +28,7 @@
 
 // Application states
 enum class AppState {
+    WELCOME,        // Welcome screen (boot until first status)
     IDLE,           // Waiting for approval request (show dancing logo)
     SHOWING_REQUEST, // Displaying an approval request
     THINKING,       // Agent is generating/executing
@@ -37,8 +39,8 @@ enum class AppState {
     STUCK           // Agent stuck (generating forever)
 };
 
-AppState currentState = AppState::IDLE;
-AppState prevState = AppState::IDLE;
+AppState currentState = AppState::WELCOME;
+AppState prevState = AppState::WELCOME;
 ChatAnimator animator;
 ApprovalScreen approvalScreen;
 ButtonManager buttonManager;
@@ -257,10 +259,40 @@ void loop() {
     // the screen only when the state actually changes.
     static AppState renderedState = AppState::SHOWING_REQUEST;
     bool justEntered = (currentState != renderedState);
+    AppState prevRendered = renderedState;
     renderedState = currentState;
+
+    // Le sprite du chat ne fait que 240 px de large (centré, x40..280). En quittant
+    // un état PLEIN ÉCRAN (welcome / dead / stuck / error / approbation) vers un état
+    // "chat", des résidus resteraient sur les bords x0..40 et x280..320. On repeint
+    // donc tout le fond rainbow Mistral plein écran (animator.reset() = fillRect 320
+    // large sur les 5 bandes), le chat se redessine par-dessus le centre.
+    auto isFullScreen = [](AppState s) {
+        return s == AppState::WELCOME || s == AppState::DEAD || s == AppState::STUCK
+            || s == AppState::ERROR_STATE || s == AppState::SHOWING_REQUEST;
+    };
+    if (justEntered && isFullScreen(prevRendered) && !isFullScreen(currentState)) {
+        animator.reset();   // repeint le rainbow plein écran (320x240)
+    }
 
     // State machine
     switch (currentState) {
+        case AppState::WELCOME: {
+            if (justEntered) {
+                drawWelcomeScreen();
+            }
+            led::welcome();
+
+            // Ping périodique : WELCOME est l'état « device allumé, en attente de
+            // session » — c'est exactement quand le PC sonde le port (auto-détect,
+            // doctor, setup). Sans ça, le device serait indétectable au boot.
+            if (::millis() - lastPingTime > 5000) {
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\"}\n", FW_VERSION);
+                lastPingTime = ::millis();
+            }
+            break;
+        }
+
         case AppState::IDLE: {
             drawCatBanner(now, justEntered);
             led::idle();
