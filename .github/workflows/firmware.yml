@@ -113,7 +113,8 @@ jobs:
         run: |
           # Check that tag vX.Y.Z matches VERSION file
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          FILE_VERSION=$(cat VERSION)
+          # tr -d : robuste face à un espace/CRLF résiduel dans VERSION
+          FILE_VERSION=$(tr -d '[:space:]' < VERSION)
           
           if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
             echo "::error::Tag version ($TAG_VERSION) does not match VERSION file ($FILE_VERSION)"
@@ -124,8 +125,8 @@ jobs:
       
       - name: Create manifest.json
         run: |
-          # Read version from VERSION file
-          VERSION=$(cat VERSION)
+          # Read version from VERSION file (robuste : strip espace/CRLF)
+          VERSION=$(tr -d '[:space:]' < VERSION)
           
           # Get git commit hash
           COMMIT=$(git rev-parse --short HEAD)
