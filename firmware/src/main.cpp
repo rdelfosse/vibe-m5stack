@@ -20,6 +20,11 @@
 #include "serial/protocol.h"
 #include "serial/serial_io.h"
 
+// Version fallback if not defined by build system
+#ifndef FW_VERSION
+#define FW_VERSION "dev"
+#endif
+
 // Application states
 enum class AppState {
     IDLE,           // Waiting for approval request (show dancing logo)
@@ -68,12 +73,14 @@ void setup() {
     M5.Lcd.setTextColor(WHITE, bg);
     M5.Lcd.setTextSize(2);
     M5.Lcd.setCursor(8, 20);
+    M5.Lcd.printf("v%s", FW_VERSION);
+    M5.Lcd.setCursor(8, 50);
     M5.Lcd.printf("sprite: %s", animator.isReady() ? "OK" : "FAIL");
-    M5.Lcd.setCursor(8, 60);
+    M5.Lcd.setCursor(8, 80);
     M5.Lcd.printf("need : %u B", animator.bytesNeeded());
-    M5.Lcd.setCursor(8, 90);
+    M5.Lcd.setCursor(8, 110);
     M5.Lcd.printf("psram: %u B", animator.psramFree());
-    M5.Lcd.setCursor(8, 120);
+    M5.Lcd.setCursor(8, 140);
     M5.Lcd.printf("dram : %u B", animator.dramFree());
     ::delay(5000);
 
@@ -260,7 +267,7 @@ void loop() {
 
             // Send periodic ping
             if (::millis() - lastPingTime > 5000) {
-                bridgeSerial.println("{\"type\":\"ping\"}");
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\"}\n", FW_VERSION);
                 lastPingTime = ::millis();
             }
             break;

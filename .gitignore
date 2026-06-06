@@ -5,8 +5,11 @@ build/
 # Arduino
 *.elf
 *.hex
-*.bin
 *.eep
+
+# ESP32 firmware binaries - ignore except web flasher files
+*.bin
+!docs/flash/firmware-merged.bin
 
 # Python
 __pycache__/
@@ -44,3 +47,7 @@ uv.lock
 
 # Markdown (briefs, notes — gardés en local)
 *.md
+!CHANGELOG.md
+!README.md
+!LICENSE
+!NOTICE
