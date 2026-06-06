@@ -2,7 +2,10 @@
 // Copyright 2026
 
 #include "welcome.h"
-#include "gif_frames.h"
+// NE PAS inclure gif_frames.h ici : ce header DÉFINIT ~3 MB de données de frames
+// et est réservé à gif_animator.cpp (l'inclure dans un 2e TU duplique le payload).
+// gif_metadata.h expose GIF_WIDTH (constexpr) + all_frames (extern), sans les pixels.
+#include "gif_metadata.h"
 
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
@@ -32,7 +35,7 @@ void renderQRCode(int16_t x, int16_t y, uint8_t scale) {
 void drawWelcomeScreen() {
     M5.Lcd.fillScreen(BLACK);
 
-    const uint16_t* src = frame_0_data;
+    const uint16_t* src = all_frames[0];   // 1re frame, via le symbole externe (pas de copie)
     const int srcW = GIF_WIDTH;
     const int dstW = 120;
     const int dstH = 120;
