@@ -259,7 +259,21 @@ void loop() {
     // the screen only when the state actually changes.
     static AppState renderedState = AppState::SHOWING_REQUEST;
     bool justEntered = (currentState != renderedState);
+    AppState prevRendered = renderedState;
     renderedState = currentState;
+
+    // Le sprite du chat ne fait que 240 px de large (centré, x40..280). En quittant
+    // un état PLEIN ÉCRAN (welcome / dead / stuck / error / approbation) vers un état
+    // "chat", des résidus resteraient sur les bords x0..40 et x280..320. On repeint
+    // donc tout le fond rainbow Mistral plein écran (animator.reset() = fillRect 320
+    // large sur les 5 bandes), le chat se redessine par-dessus le centre.
+    auto isFullScreen = [](AppState s) {
+        return s == AppState::WELCOME || s == AppState::DEAD || s == AppState::STUCK
+            || s == AppState::ERROR_STATE || s == AppState::SHOWING_REQUEST;
+    };
+    if (justEntered && isFullScreen(prevRendered) && !isFullScreen(currentState)) {
+        animator.reset();   // repeint le rainbow plein écran (320x240)
+    }
 
     // State machine
     switch (currentState) {
