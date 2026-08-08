@@ -66,10 +66,6 @@ bool ledFlourishDone = true;    // Has the DONE flourish been shown?
 // Configuration-based state (replaces global chatonFatMode)
 volatile bool forceRedraw = false; // Force screen redraw
 
-// Config menu long-press tracking (1000ms for menu, vs 1500ms for chaton-fat)
-static uint32_t configMenuHoldStart = 0;
-static bool configMenuTracking = false;
-
 // Thinking activity tracking
 ThinkingActivity currentThinkingActivity = ThinkingActivity::REASONING;
 
@@ -233,34 +229,35 @@ void loop() {
     static bool buttonCWaitRelease = false;  // long-press done: wait for release
     uint32_t now = ::millis();
 
-    // Only track long-press for config menu when in IDLE or DONE (not during SHOWING_REQUEST)
-    if (currentState == AppState::SHOWING_REQUEST) {
-        // C = cancel here. Don't track for config menu.
-        buttonCTracking = false;
-        buttonCWaitRelease = buttonManager.isHeld(AppButton::C);
-    } else if (buttonManager.isHeld(AppButton::C)) {
-        if (!buttonCWaitRelease) {
-            if (!buttonCTracking) {
-                buttonCTracking = true;
-                buttonCHoldStart = now;
-            } else if (now - buttonCHoldStart >= 1000) {
-                // Open config menu instead of toggling Chaton Fat
-                if (currentState == AppState::IDLE || currentState == AppState::DONE) {
+    // Only track long-press for config menu when in IDLE or DONE. Ailleurs
+    // (approbation où C = annuler, menu déjà ouvert, thinking…) on ne mesure
+    // rien et on exige un relâchement avant de réarmer — pas de vibration
+    // fantôme hors IDLE/DONE.
+    if (currentState == AppState::IDLE || currentState == AppState::DONE) {
+        if (buttonManager.isHeld(AppButton::C)) {
+            if (!buttonCWaitRelease) {
+                if (!buttonCTracking) {
+                    buttonCTracking = true;
+                    buttonCHoldStart = now;
+                } else if (now - buttonCHoldStart >= 1000) {
                     prevState = currentState;
                     currentState = AppState::CONFIG_MENU;
                     configMenu.open();
                     forceRedraw = true;
+                    if (!configManager.get().quietMode) {
+                        buttonManager.vibrate(100, 50);
+                    }
+                    buttonCTracking = false;
+                    buttonCWaitRelease = true; // wait for release before re-triggering
                 }
-                if (!configManager.get().quietMode) {
-                    buttonManager.vibrate(100, 50);
-                }
-                buttonCTracking = false;
-                buttonCWaitRelease = true; // wait for release before re-triggering
             }
+        } else {
+            buttonCTracking = false;
+            buttonCWaitRelease = false;
         }
     } else {
         buttonCTracking = false;
-        buttonCWaitRelease = false;
+        buttonCWaitRelease = buttonManager.isHeld(AppButton::C);
     }
     
     // Track last message time
@@ -273,9 +270,11 @@ void loop() {
         
         if (msgType == MessageType::APPROVAL_REQUEST) {
             // Approval has priority over status states
-            // If we're in CONFIG_MENU, store that we came from the menu
-            // but keep the original prevState so we return to IDLE/DONE after approval
-            if (currentState != AppState::CONFIG_MENU) {
+            // If we're in CONFIG_MENU, close it properly but keep the original
+            // prevState so we return to IDLE/DONE after approval
+            if (currentState == AppState::CONFIG_MENU) {
+                configMenu.close();
+            } else {
                 prevState = currentState;
             }
             currentState = AppState::SHOWING_REQUEST;
@@ -306,8 +305,11 @@ void loop() {
                 currentThinkingActivity = serialProtocol.getThinkingActivity();
             }
             
-            // Map agent state to app state (unless approval is active)
-            if (currentState != AppState::SHOWING_REQUEST) {
+            // Map agent state to app state (unless approval is active or the
+            // user is in the config menu — un simple heartbeat de statut ne
+            // doit pas éjecter le menu ; seuls approbation et watchdog le font)
+            if (currentState != AppState::SHOWING_REQUEST &&
+                currentState != AppState::CONFIG_MENU) {
                 prevState = currentState;
                 
                 switch (agentState) {
@@ -340,7 +342,13 @@ void loop() {
         // DEAD check: no message received for WATCHDOG_DEAD_MS
         if (statusInitialized && now - lastRxMs > WATCHDOG_DEAD_MS) {
             if (currentState != AppState::DEAD && currentState != AppState::STUCK) {
-                prevState = currentState;
+                if (currentState == AppState::CONFIG_MENU) {
+                    // Le menu ne survit pas au watchdog ; prevState garde
+                    // l'état d'avant le menu (IDLE/DONE).
+                    configMenu.close();
+                } else {
+                    prevState = currentState;
+                }
                 currentState = AppState::DEAD;
                 triggerWatchdogAlarm(AppState::DEAD);
             }
@@ -477,28 +485,70 @@ void loop() {
         }
         
         case AppState::CONFIG_MENU: {
-            // Draw config menu
+            // L'appui long qui a ouvert le menu a laissé des traces : le front
+            // wasPressed(C) latché au début de l'appui, et C encore enfoncé.
+            // Sans purge, la 1re frame naviguerait (front) et la 2e fermerait
+            // le menu (niveau) — menu inutilisable.
+            static bool menuWaitCRelease = false;
+            static uint32_t menuCHoldStart = 0;
+            static bool menuCTracking = false;
+
             if (justEntered) {
+                buttonManager.wasPressed(AppButton::A);  // purge des fronts latchés
+                buttonManager.wasPressed(AppButton::B);
+                buttonManager.wasPressed(AppButton::C);
+                menuWaitCRelease = buttonManager.isHeld(AppButton::C);
+                menuCTracking = false;
                 configMenu.draw(true);
             } else {
                 configMenu.draw();
             }
-            
-            // Handle menu navigation
-            bool btnAPressed = buttonManager.wasPressed(AppButton::A);
-            bool btnBPressed = buttonManager.wasPressed(AppButton::B);
-            bool btnCPressed = buttonManager.wasPressed(AppButton::C);
-            bool btnCHeld = buttonManager.isHeld(AppButton::C);
-            
-            if (!configMenu.update(btnAPressed, btnBPressed, btnCPressed, btnCHeld)) {
-                // Menu closed, return to previous state
-                currentState = prevState;
-                forceRedraw = true;
+
+            if (menuWaitCRelease) {
+                // Attendre le relâchement de C avant de traiter la navigation ;
+                // consommer les fronts qui arriveraient pendant l'attente.
+                buttonManager.wasPressed(AppButton::A);
+                buttonManager.wasPressed(AppButton::B);
+                buttonManager.wasPressed(AppButton::C);
+                if (!buttonManager.isHeld(AppButton::C)) {
+                    menuWaitCRelease = false;
+                }
+            } else {
+                // Sortie par appui long C : vrai timer 1 s, pas le niveau brut.
+                bool cLongExit = false;
+                if (buttonManager.isHeld(AppButton::C)) {
+                    if (!menuCTracking) {
+                        menuCTracking = true;
+                        menuCHoldStart = now;
+                    } else if (now - menuCHoldStart >= 1000) {
+                        cLongExit = true;
+                        menuCTracking = false;
+                        menuWaitCRelease = true; // pas de re-déclenchement tant que C est enfoncé
+                    }
+                } else {
+                    menuCTracking = false;
+                }
+
+                bool btnAPressed = buttonManager.wasPressed(AppButton::A);
+                bool btnBPressed = buttonManager.wasPressed(AppButton::B);
+                bool btnCPressed = buttonManager.wasPressed(AppButton::C);
+
+                if (!configMenu.update(btnAPressed, btnBPressed, btnCPressed, cLongExit)) {
+                    // Menu closed, return to previous state
+                    currentState = prevState;
+                    forceRedraw = true;
+                }
             }
-            
-            // Apply LED brightness if it changed in menu
-            led::setBrightness(configManager.get().ledBrightness);
-            
+
+            // Apply LED brightness only when it actually changed: setBrightness()
+            // fait un FastLED.show(), inutile de le marteler à 60 fps.
+            static uint8_t appliedBrightness = 0;
+            uint8_t brightness = configManager.get().ledBrightness;
+            if (brightness != appliedBrightness) {
+                led::setBrightness(brightness);
+                appliedBrightness = brightness;
+            }
+
             led::idle();  // Keep a subtle LED animation in config menu
             break;
         }

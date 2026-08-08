@@ -33,8 +33,11 @@ public:
     void begin();
     
     // Update menu state based on button input
+    // btnCLongPress doit être un front « appui long C détecté » calculé par
+    // l'appelant (timer ~1 s), PAS le niveau brut isHeld() — sinon tout tap C
+    // fermerait le menu à la frame suivante.
     // Returns true if menu should remain open, false if it should close
-    bool update(bool btnAPressed, bool btnBPressed, bool btnCPressed, bool btnCHeld);
+    bool update(bool btnAPressed, bool btnBPressed, bool btnCPressed, bool btnCLongPress);
     
     // Draw the menu
     void draw(bool forced = false);

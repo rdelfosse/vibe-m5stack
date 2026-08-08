@@ -27,13 +27,17 @@ void ConfigMenu::begin() {
     // Nothing to initialize here, M5Stack is already set up
 }
 
-bool ConfigMenu::update(bool btnAPressed, bool btnBPressed, bool btnCPressed, bool btnCHeld) {
+bool ConfigMenu::update(bool btnAPressed, bool btnBPressed, bool btnCPressed, bool btnCLongPress) {
     if (!active) {
         return false;
     }
-    
+
     // Handle navigation
-    if (btnCPressed) {
+    if (btnCLongPress) {
+        // Long press C: exit menu without selecting (front calculé par l'appelant)
+        close();
+        return false;
+    } else if (btnCPressed) {
         moveNext();
         needsRedraw = true;
     } else if (btnBPressed) {
@@ -42,18 +46,14 @@ bool ConfigMenu::update(bool btnAPressed, bool btnBPressed, bool btnCPressed, bo
     } else if (btnAPressed) {
         selectItem();
         needsRedraw = true;
-        
+
         // If EXIT was selected, close the menu
         if (selectedItem == ConfigMenuItem::EXIT) {
             close();
             return false;
         }
-    } else if (btnCHeld) {
-        // Long press C to exit menu without selecting
-        close();
-        return false;
     }
-    
+
     return true;
 }
 
@@ -61,9 +61,16 @@ void ConfigMenu::draw(bool forced) {
     if (!active && !forced) {
         return;
     }
-    
+
+    // Ne repeindre que sur changement réel : un fillRect plein écran + textes à
+    // 30 fps sature le bus SPI et fait bégayer les LED (cf. commentaire loop()).
+    if (!forced && !needsRedraw) {
+        return;
+    }
+
     uint32_t now = ::millis();
-    // Throttle redraws to ~30fps to avoid SPI bus saturation
+    // Throttle anti-spam ; needsRedraw reste armé si on saute, donc le dessin
+    // partira à la frame suivante.
     if (!forced && now - lastDrawTime < 33) {
         return;
     }
