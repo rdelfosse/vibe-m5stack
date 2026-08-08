@@ -14,6 +14,7 @@
 // limitations under the License.
 #include <M5Stack.h>
 #include "display/anim.h"
+#include "display/chaton_fat_draw.h"
 #include "display/screen.h"
 #include "display/welcome.h"
 #include "inputs/buttons.h"
@@ -56,6 +57,10 @@ bool statusInitialized = false; // Has first status been received?
 
 // LED state tracking for transitions
 bool ledFlourishDone = true;    // Has the DONE flourish been shown?
+
+// Chaton Fat easter egg
+bool chatonFatMode = false;      // Toggle state for Chaton Fat mode
+volatile bool forceRedraw = false; // Force screen redraw
 
 // Thinking activity tracking
 ThinkingActivity currentThinkingActivity = ThinkingActivity::REASONING;
@@ -149,13 +154,55 @@ void drawStatusBanner() {
 
 // Dessine le chat (throttlé ~8 fps) puis le bandeau par-dessus. `forced` redessine
 // immédiatement (utilisé à l'entrée d'un état pour un bandeau réactif).
+// En mode Chaton Fat, remplace le sprite animé par l'image fixe + bandeau.
 void drawCatBanner(uint32_t now, bool forced) {
     static uint32_t lastCat = 0;
-    if (forced || now - lastCat > 120) {
-        lastCat = now;
-        animator.update();
-        animator.draw();
-        drawStatusBanner();
+    static bool wasChatonFat = false;
+
+    if (chatonFatMode) {
+        // Chaton Fat mode: sprite fixe, (re)dessiné uniquement sur forced/transition.
+        if (forced) {
+            animator.reset(); // Redraw rainbow background
+            // Draw Chaton Fat: 52x43 @ scale 4 = 208x172, centered in 240px area (x40..280)
+            // Center: x = 40 + (240-208)/2 = 56, y = (240-172)/2 = 34
+            drawChatonFat(56, 34, 4, BLACK, WHITE);  // contour noir, corps blanc
+
+            // Draw fake announcement banner (top-right area)
+            M5.Lcd.fillRect(120, 0, 200, 50, BLACK);
+            M5.Lcd.setTextFont(2);
+            M5.Lcd.setTextSize(2);
+            M5.Lcd.setTextColor(0xFC00, BLACK);
+            M5.Lcd.setCursor(130, 10);
+            M5.Lcd.print("Chaton Fat");
+            M5.Lcd.setTextSize(1);
+            M5.Lcd.setTextColor(WHITE, BLACK);
+            M5.Lcd.setCursor(130, 35);
+            M5.Lcd.print("le nouveau modele Mistral");
+
+            drawStatusBanner();
+            lastCat = now;
+        } else if (now - lastCat > 120) {
+            // Le bandeau de statut doit rester vivant (Thinking/Running/Reading…
+            // change sans transition d'état) : on ne fige que le sprite.
+            lastCat = now;
+            drawStatusBanner();
+        }
+        wasChatonFat = true;
+    } else {
+        // Normal mode: throttled animation
+        if (forced || now - lastCat > 120) {
+            // En sortie du mode Chaton Fat, le faux bandeau noir déborde la zone du
+            // sprite (jusqu'à x320) : un reset() plein écran efface ce résidu avant de
+            // redessiner le chat. Sinon une bande noire reste en haut à droite.
+            if (wasChatonFat) {
+                animator.reset();
+                wasChatonFat = false;
+            }
+            lastCat = now;
+            animator.update();
+            animator.draw();
+            drawStatusBanner();
+        }
     }
 }
 
@@ -163,9 +210,37 @@ void loop() {
     M5.update();
     buttonManager.update();
     
+    // Chaton Fat easter egg: long press on C button (only outside SHOWING_REQUEST)
+    static uint32_t buttonCHoldStart = 0;
+    static bool buttonCTracking = false;     // mesure d'un appui en cours
+    static bool buttonCWaitRelease = false;  // toggle fait : attendre le relâchement
+    uint32_t now = ::millis();
+
+    if (currentState == AppState::SHOWING_REQUEST) {
+        // C = annuler ici. On ne mesure rien, et si C est enfoncé on exigera un
+        // relâchement avant de réarmer le toggle en sortant de cet état.
+        buttonCTracking = false;
+        buttonCWaitRelease = buttonManager.isHeld(AppButton::C);
+    } else if (buttonManager.isHeld(AppButton::C)) {
+        if (!buttonCWaitRelease) {
+            if (!buttonCTracking) {
+                buttonCTracking = true;
+                buttonCHoldStart = now;
+            } else if (now - buttonCHoldStart >= 1500) {
+                chatonFatMode = !chatonFatMode;
+                buttonManager.vibrate(100, 50);
+                forceRedraw = true;
+                buttonCTracking = false;
+                buttonCWaitRelease = true; // pas de re-toggle tant que C reste enfoncé
+            }
+        }
+    } else {
+        buttonCTracking = false;
+        buttonCWaitRelease = false;
+    }
+    
     // Track last message time
     static uint32_t loopCount = 0;
-    uint32_t now = ::millis();
     
     // Handle serial communication
     if (serialProtocol.receive()) {
@@ -258,7 +333,8 @@ void loop() {
     // making the LED animations stutter. The LEDs are refreshed every frame;
     // the screen only when the state actually changes.
     static AppState renderedState = AppState::SHOWING_REQUEST;
-    bool justEntered = (currentState != renderedState);
+    bool justEntered = (currentState != renderedState) || forceRedraw;
+    if (forceRedraw) forceRedraw = false;
     AppState prevRendered = renderedState;
     renderedState = currentState;
 

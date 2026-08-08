@@ -42,4 +42,5 @@ private:
     bool prevStates[3];
     bool currStates[3];
     bool pressedFlags[3];
+    bool heldStates[3];   // niveau « bouton maintenu » (isPressed), distinct du front wasPressed
 };
