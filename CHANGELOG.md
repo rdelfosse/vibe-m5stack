@@ -9,6 +9,15 @@ En pré-1.0, la version *minor* (0.X.0) est incrémentée pour les nouvelles fon
 et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
+## [0.3.1] - 2026-08-08
+
+### Changé
+- **Fonctionnement dégradé temporaire** : dépendance épinglée à `mistral-vibe>=2.11,<2.23`.
+  La 2.23 remplace `AgentLoop.set_approval_callback` par un `InteractionRequestBroker`
+  (les approbations deviennent des `ApprovalRequestEvent` résolus via
+  `resolve_approval_request`) : le hook M5Stack n'est pas encore adapté et crashe au
+  lancement sur ≥2.23. Le pin sera levé quand le hook aura été porté sur la nouvelle API.
+
 ## [0.3.0] - 2026-06-02
 
 ### Ajoute
