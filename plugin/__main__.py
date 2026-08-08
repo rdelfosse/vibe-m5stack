@@ -114,6 +114,12 @@ def main():
 
     # Load the hook - this monkey-patches AgentLoop
     import plugin.vibe_m5stack_hook
+    # Load voice hook for voice input support
+    try:
+        import plugin.voice_hook
+        print("[m5stack] Voice input support loaded", file=sys.stderr)
+    except Exception as e:
+        print(f"[m5stack] Voice input support not available: {e}", file=sys.stderr)
     from plugin import config
 
     # Check port resolution for user feedback (before TUI takes over stderr)

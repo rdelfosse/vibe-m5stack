@@ -400,4 +400,27 @@ void welcome() {
     }
 }
 
+void listening() {
+    const uint32_t now = millis();
+    static uint8_t pulse = 100;
+    static bool up = true;
+    static uint32_t lastP = 0;
+    
+    // Fast cyan/white pulse for listening state
+    if (now - lastP > 15) {
+        lastP = now;
+        if (up) {
+            pulse = (pulse + 15 >= 240) ? 240 : pulse + 15;
+            if (pulse >= 240) up = false;
+        } else {
+            pulse = (pulse <= 15) ? 15 : pulse - 15;
+            if (pulse <= 15) up = true;
+        }
+        CRGB c = blend(CRGB::White, CRGB::Cyan, pulse);
+        fill_solid(ring, RING_LEDS, c);
+        fill_solid(matrixB, MATRIX_LEDS, c);
+        FastLED.show();
+    }
+}
+
 }  // namespace led

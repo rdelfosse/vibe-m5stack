@@ -682,3 +682,45 @@ class BrokerManager:
     
     def __del__(self):
         self.close()
+
+
+# Voice support additions
+import threading
+from typing import Callable, Dict, Any
+
+class VoiceMessageHandler:
+    """Handler for voice messages in broker."""
+    
+    def __init__(self):
+        self._voice_callbacks = []
+        self._lock = threading.Lock()
+    
+    def register_voice_callback(self, callback: Callable[[Dict[str, Any]], None]):
+        """Register a callback for voice messages."""
+        with self._lock:
+            if callback not in self._voice_callbacks:
+                self._voice_callbacks.append(callback)
+    
+    def handle_voice_message(self, msg: Dict[str, Any]):
+        """Call all registered voice callbacks."""
+        if msg.get("type") != "voice":
+            return
+        with self._lock:
+            for callback in self._voice_callbacks:
+                try:
+                    callback(msg)
+                except Exception as e:
+                    logger.error(f"Error in voice callback: {e}")
+
+# Global voice handler for broker
+_voice_message_handler = VoiceMessageHandler()
+
+
+def register_voice_callback(callback: Callable[[Dict[str, Any]], None]):
+    """Register a global callback for voice messages."""
+    _voice_message_handler.register_voice_callback(callback)
+
+
+def handle_voice_message(msg: Dict[str, Any]):
+    """Handle a voice message (call registered callbacks)."""
+    _voice_message_handler.handle_voice_message(msg)

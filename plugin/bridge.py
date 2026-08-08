@@ -426,6 +426,23 @@ class M5StackBridge:
             message["activity"] = activity
         return self.send(message)
     
+    def send_voice_ack(self, state: str, text: str = "") -> bool:
+        """
+        Send voice acknowledgment to M5Stack.
+        
+        Args:
+            state: "transcribing" or "done"
+            text: Transcribed text (for state="done")
+        
+        Returns:
+            True if message was sent successfully
+        """
+        message = {"type": "voice_ack", "state": state}
+        if text:
+            message["text"] = text[:100]  # Truncate to reasonable length
+        return self.send(message)
+
+
     def close(self):
         """Close the serial connection."""
         self.running = False

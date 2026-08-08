@@ -44,5 +44,6 @@ void setAgentState(AgentState state, bool flourish = false, ThinkingActivity act
 void idle();
 // Welcome animation: white breathing on NeoHEX + side ring
 void welcome();
+void listening();
 
 }  // namespace led
