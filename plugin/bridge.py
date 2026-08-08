@@ -239,15 +239,31 @@ class M5StackBridge:
                                 if isinstance(msg, dict) and msg.get("type") == "ping":
                                     self.firmware_version = msg.get("fw")
                                     continue
+                                # Route voice messages directly to voice handler
+                                if isinstance(msg, dict) and msg.get("type") == "voice":
+                                    self._handle_voice_message(msg)
+                                    continue
                                 self.message_queue.put(msg)
                             except json.JSONDecodeError:
                                 # Not valid JSON, might be partial
                                 pass
-                    
+                
                 time.sleep(0.01)
             except Exception as e:
                 logger.error(f"Serial read error: {e}")
                 break
+    
+    def _handle_voice_message(self, msg):
+        """Handle incoming voice message by routing to voice handler."""
+        try:
+            from plugin.voice_handler import get_voice_handler
+            handler = get_voice_handler()
+            handler.handle_voice_message(msg)
+        except ImportError:
+            # voice_handler might not be available during testing
+            logger.debug(f"Voice message received but voice_handler not available: {msg}")
+        except Exception as e:
+            logger.error(f"Error handling voice message: {e}")
     
     def send(self, message: Dict[str, Any]) -> bool:
         """

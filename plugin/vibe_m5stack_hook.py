@@ -79,6 +79,12 @@ _status_seq = 0
 _last_status_state = "done"
 _last_status_detail = ""
 _last_status_activity = ""
+# Global references for voice handler callbacks
+_agent_loop = None
+_asyncio_loop = None
+# Resolver de l'approbation en cours (armé par wrapped(), désarmé en finally).
+# Permet au reject vocal de résoudre l'approbation pendante en (NO, consigne).
+_active_approval_resolver = None
 
 # Tool classification for thinking activity
 READING_TOOLS = {"read_file", "read", "grep", "search", "glob", "ls",
@@ -439,7 +445,11 @@ def patch_act_for_status():
     
     async def patched_act(self, msg, *args, **kwargs):
         """Wrapped act that observes events and pushes status."""
-        global _status_seq, _last_status_activity
+        global _status_seq, _last_status_activity, _agent_loop, _asyncio_loop
+        # Store agent loop and event loop for voice handler callbacks
+        _agent_loop = self
+        _asyncio_loop = asyncio.get_running_loop()
+
         
         # Push thinking state at start of turn
         push_status_to_device("thinking", "", 0, "reasoning")
@@ -480,6 +490,7 @@ def patch_agent_loop():
         tui_instance = getattr(callback, "__self__", None)  # TextualUI instance or None
 
         async def wrapped(tool, args, tool_call_id, required_permissions):
+            global _active_approval_resolver
             # Visual notification in TUI (non-blocking)
             if tui_instance is not None and hasattr(tui_instance, "notify"):
                 try:
@@ -498,6 +509,23 @@ def patch_agent_loop():
             m5_task = asyncio.create_task(
                 m5stack_approval_callback(tool, args, tool_call_id, required_permissions)
             )
+
+            def _resolve_pending(result):
+                """Résout l'approbation en cours depuis l'extérieur (reject vocal).
+
+                Même mécanisme que la victoire M5Stack : compléter la Future
+                que Textual attend dans _pending_approval ferme la modal et
+                fait aboutir modal_task avec `result`.
+                """
+                pa = getattr(tui_instance, "_pending_approval", None)
+                if pa is not None and not pa.done():
+                    pa.set_result(result)
+                    return True
+                return False
+
+            # Une seule approbation à la fois (flux device sérialisé) : un
+            # global suffit pour que le reject vocal retrouve la bonne Future.
+            _active_approval_resolver = _resolve_pending
 
             try:
                 done, pending = await asyncio.wait(
@@ -527,6 +555,8 @@ def patch_agent_loop():
                 modal_task.cancel()
                 m5_task.cancel()
                 raise
+            finally:
+                _active_approval_resolver = None
 
         self.approval_callback = wrapped
     
@@ -547,8 +577,58 @@ def install_hook():
     # Patch AgentLoop - this wraps all future set_approval_callback calls
     patch_agent_loop()
     
-    # Patch AgentLoop.act for status tracking
     patch_act_for_status()
+
+    # Setup voice handler callbacks
+    try:
+        from plugin.voice_handler import get_voice_handler
+        handler = get_voice_handler()
+
+        def inject_callback(text: str):
+            if _agent_loop is not None and _asyncio_loop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    _agent_loop.inject_user_context(text),
+                    _asyncio_loop
+                )
+        handler.set_inject_callback(inject_callback)
+
+        def resolve_approval_callback(request_id: int, approved: bool, text: str):
+            """Résout l'approbation pendante depuis le thread de transcription.
+
+            Utilisé par le reject vocal : approved est False, text = consigne.
+            Sans approbation en cours (timeout TUI, annulation), on logge et
+            on ne fait rien — ne jamais résoudre à l'aveugle.
+            """
+            resolver = _active_approval_resolver
+            loop = _asyncio_loop
+            if resolver is None or loop is None:
+                logger.warning(
+                    f"Voice resolve dropped (no pending approval): id={request_id}"
+                )
+                return
+            response = ApprovalResponse.YES if approved else ApprovalResponse.NO
+            loop.call_soon_threadsafe(resolver, (response, text))
+            logger.info(f"Voice approval resolved: id={request_id}, approved={approved}")
+        handler.set_resolve_approval_callback(resolve_approval_callback)
+
+        def send_voice_ack_callback(state: str, text: str = ""):
+            # Toujours passer par la connexion persistante du broker owner —
+            # ouvrir un second port série en parallèle échoue ou vole la
+            # connexion. (Les événements voice n'arrivent que chez l'owner.)
+            try:
+                mgr = get_or_init_broker()
+                if mgr is not None and mgr.is_owner() and mgr.broker is not None:
+                    mgr.broker.bridge.send_voice_ack(state, text)
+                else:
+                    logger.debug("voice_ack skipped (no owner broker)")
+            except Exception as e:
+                logger.warning(f"Could not send voice ack: {e}")
+        handler.set_send_voice_ack_callback(send_voice_ack_callback)
+        logger.info("Voice handler callbacks installed")
+    except ImportError as e:
+        logger.debug(f"Voice handler not available: {e}")
+    except Exception as e:
+        logger.error(f"Error setting up voice handler: {e}")
     
     logger.info("Hook installation complete")
 

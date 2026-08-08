@@ -1,11 +1,23 @@
-"""Vibe M5Stack - Voice handler module"""
-import asyncio
+"""Vibe M5Stack - Voice handler module.
+
+Reçoit les événements voice du device (via le reader du broker), pilote
+l'enregistrement micro côté PC et la transcription Voxtral, puis :
+  - prompt  : injecte la transcription comme instruction utilisateur ;
+  - approve : injecte la transcription en commentaire (l'approbation est déjà
+              résolue YES par le response envoyé par le device) ;
+  - reject  : résout l'approbation en NO avec la transcription comme raison
+              (PAS d'injection : le feedback EST la consigne).
+"""
 import logging
 import threading
-from typing import Optional, Dict, Any, Callable
+
 from plugin.voice import get_voice_input
 
 logger = logging.getLogger(__name__)
+
+# Message de refus par défaut quand la consigne vocale est vide/indisponible.
+DEFAULT_REJECT_REASON = "User rejected via M5Stack"
+
 
 class VoiceHandler:
     def __init__(self):
@@ -13,10 +25,13 @@ class VoiceHandler:
         self._recording = False
         self._current_mode = None
         self._current_id = 0
-        self._lock = threading.Lock()
-        self._loop = None
+        # RLock : _cleanup_recording() est appelé depuis des chemins qui
+        # tiennent déjà le verrou (handle_voice_message -> _handle_voice_stop).
+        self._lock = threading.RLock()
+
         self._inject_callback = None
         self._resolve_approval_callback = None
+        self._send_voice_ack_callback = None
 
     def set_inject_callback(self, callback):
         self._inject_callback = callback
@@ -24,17 +39,21 @@ class VoiceHandler:
     def set_resolve_approval_callback(self, callback):
         self._resolve_approval_callback = callback
 
-    def set_event_loop(self, loop):
-        self._loop = loop
+    def set_send_voice_ack_callback(self, callback):
+        self._send_voice_ack_callback = callback
+
+    # -- Entrée des messages device ----------------------------------------
 
     def handle_voice_message(self, msg):
         if msg.get("type") != "voice":
             return
+
         action = msg.get("action")
         mode = msg.get("mode", "prompt")
         request_id = msg.get("id", 0)
+
         logger.info(f"Voice message: action={action}, mode={mode}, id={request_id}")
-        
+
         with self._lock:
             if action == "start":
                 self._handle_voice_start(mode, request_id)
@@ -43,59 +62,118 @@ class VoiceHandler:
 
     def _handle_voice_start(self, mode, request_id):
         if self._recording:
-            logger.warning("Recording already in progress")
-            return
+            # Session zombie (stop jamais reçu : reboot device, message perdu…) :
+            # on repart proprement plutôt que de bloquer la voix pour toujours.
+            logger.warning("Recording already in progress - resetting stale session")
+            try:
+                self._voice_input.cancel()
+            except Exception:
+                pass
+            self._cleanup_recording()
+
         self._current_mode = mode
         self._current_id = request_id
         self._recording = True
+
         if self._voice_input.record_start():
             logger.info(f"Recording started (mode={mode}, id={request_id})")
         else:
             logger.error("Failed to start recording")
-            self._recording = False
+            self._cleanup_recording()
 
     def _handle_voice_stop(self, mode, request_id):
         if not self._recording:
             logger.warning("No recording in progress")
             return
-        
+
         wav_data = self._voice_input.record_stop()
-        if not wav_data:
-            logger.warning("No audio data captured")
-            self._cleanup_recording()
-            return
-        
-        if mode == "prompt":
-            self._transcribe_and_inject(wav_data, False, 0)
-        elif mode == "approve":
-            self._transcribe_and_inject(wav_data, True, request_id)
-        elif mode == "reject":
-            self._transcribe_and_inject(wav_data, True, request_id)
+        # Quoi qu'il arrive ensuite, la session d'enregistrement est terminée :
+        # la transcription tourne dans son propre thread sur wav_data.
         self._cleanup_recording()
 
-    def _transcribe_and_inject(self, wav_data, is_approval, approval_id):
-        if not self._voice_input.is_available():
-            logger.error("Voice input not available")
+        if not wav_data:
+            logger.warning("No audio data captured")
+            self._send_ack("done", "")
+            self._resolve_reject_fallback(mode, request_id, DEFAULT_REJECT_REASON)
             return
+
+        if mode not in ("prompt", "approve", "reject"):
+            logger.warning(f"Unknown mode: {mode}")
+            self._send_ack("done", "")
+            return
+
+        # L'enregistrement est fini, la transcription commence.
+        self._send_ack("transcribing", "")
+
+        if not self._voice_input.is_available():
+            logger.error("Voice input not available (mic / mistralai / API key)")
+            self._send_ack("done", "")
+            self._resolve_reject_fallback(
+                mode, request_id, DEFAULT_REJECT_REASON + " (voice unavailable)"
+            )
+            return
+
+        # reject : résoudre l'approbation, ne PAS injecter (le feedback EST la
+        # consigne). prompt/approve : injecter seulement.
+        do_inject = mode in ("prompt", "approve")
+        reject_id = request_id if mode == "reject" else None
         threading.Thread(
             target=self._transcribe_thread,
-            args=(wav_data, is_approval, approval_id),
-            daemon=True
+            args=(wav_data, do_inject, reject_id),
+            daemon=True,
+            name="voice-transcribe",
         ).start()
 
-    def _transcribe_thread(self, wav_data, is_approval, approval_id):
+    # -- Transcription (thread dédié) ---------------------------------------
+
+    def _transcribe_thread(self, wav_data, do_inject, reject_id):
         try:
             text = self._voice_input.transcribe_sync(wav_data)
-            if not text or len(text.strip()) == 0:
+            text = text.strip() if text else ""
+
+            self._send_ack("done", text[:60])
+
+            if not text:
                 logger.warning("Empty transcription")
+                if reject_id is not None:
+                    self._resolve(reject_id, DEFAULT_REJECT_REASON)
                 return
-            logger.info(f"Transcription: {text[:100]}...")
-            if self._inject_callback:
+
+            logger.info(f"Transcription: {text[:100]}")
+
+            if reject_id is not None:
+                self._resolve(reject_id, text)
+            elif do_inject and self._inject_callback:
                 self._inject_callback(text)
-            if is_approval and self._resolve_approval_callback:
-                self._resolve_approval_callback(approval_id, False, text)
+
         except Exception as e:
             logger.error(f"Transcription error: {e}")
+            self._send_ack("done", "")
+            if reject_id is not None:
+                self._resolve(reject_id, f"{DEFAULT_REJECT_REASON} (voice error)")
+
+    # -- Helpers -------------------------------------------------------------
+
+    def _resolve(self, request_id, reason):
+        if self._resolve_approval_callback:
+            try:
+                self._resolve_approval_callback(request_id, False, reason)
+            except Exception:
+                logger.exception("resolve_approval_callback failed")
+        else:
+            logger.warning("No resolve_approval_callback set - reject lost")
+
+    def _resolve_reject_fallback(self, mode, request_id, reason):
+        """Un reject sans transcription doit quand même refuser l'action."""
+        if mode == "reject":
+            self._resolve(request_id, reason)
+
+    def _send_ack(self, state, text):
+        if self._send_voice_ack_callback:
+            try:
+                self._send_voice_ack_callback(state, text)
+            except Exception:
+                logger.exception("send_voice_ack_callback failed")
 
     def _cleanup_recording(self):
         with self._lock:
@@ -103,7 +181,9 @@ class VoiceHandler:
             self._current_mode = None
             self._current_id = 0
 
+
 _voice_handler = None
+
 
 def get_voice_handler():
     global _voice_handler
