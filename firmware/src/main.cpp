@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include <M5Stack.h>
+#include "config/config.h"
+#include "config/config_menu.h"
 #include "display/anim.h"
 #include "display/chaton_fat_draw.h"
 #include "display/screen.h"
@@ -37,7 +39,8 @@ enum class AppState {
     DONE,           // Agent finished its turn
     ERROR_STATE,   // Exception occurred
     DEAD,           // Agent dead (watchdog timeout)
-    STUCK           // Agent stuck (generating forever)
+    STUCK,          // Agent stuck (generating forever)
+    CONFIG_MENU     // Configuration menu active
 };
 
 AppState currentState = AppState::WELCOME;
@@ -46,6 +49,8 @@ ChatAnimator animator;
 ApprovalScreen approvalScreen;
 ButtonManager buttonManager;
 SerialProtocol serialProtocol;
+ConfigManager configManager;
+ConfigMenu configMenu(configManager);
 
 uint32_t lastPingTime = 0;
 
@@ -58,9 +63,12 @@ bool statusInitialized = false; // Has first status been received?
 // LED state tracking for transitions
 bool ledFlourishDone = true;    // Has the DONE flourish been shown?
 
-// Chaton Fat easter egg
-bool chatonFatMode = false;      // Toggle state for Chaton Fat mode
+// Configuration-based state (replaces global chatonFatMode)
 volatile bool forceRedraw = false; // Force screen redraw
+
+// Config menu long-press tracking (1000ms for menu, vs 1500ms for chaton-fat)
+static uint32_t configMenuHoldStart = 0;
+static bool configMenuTracking = false;
 
 // Thinking activity tracking
 ThinkingActivity currentThinkingActivity = ThinkingActivity::REASONING;
@@ -73,6 +81,10 @@ void setup() {
     ::delay(800);
 
     animator.begin();
+    
+    // Initialize configuration manager
+    configManager.begin();
+    configMenu.begin();
 
     // DIAG canary 2: green if sprite OK, blue if alloc failed
     uint16_t bg = animator.isReady() ? GREEN : BLUE;
@@ -94,6 +106,8 @@ void setup() {
     M5.Lcd.fillScreen(BLACK);
 
     led::begin();
+    // Apply saved LED brightness
+    led::setBrightness(configManager.get().ledBrightness);
 
     animator.reset();
     serialProtocol.begin(115200);
@@ -107,8 +121,10 @@ void triggerWatchdogAlarm(AppState alarmState) {
     if (alarmTriggered) return;
     alarmTriggered = true;
     
-    // Vibrate once to alert user
-    buttonManager.vibrate(200, 100);
+    // Vibrate once to alert user (respect quiet mode)
+    if (!configManager.get().quietMode) {
+        buttonManager.vibrate(200, 100);
+    }
 }
 
 // Reset watchdog alarm
@@ -159,7 +175,7 @@ void drawCatBanner(uint32_t now, bool forced) {
     static uint32_t lastCat = 0;
     static bool wasChatonFat = false;
 
-    if (chatonFatMode) {
+    if (configManager.get().model == DeviceModel::CHATON_FAT) {
         // Chaton Fat mode: sprite fixe, (re)dessiné uniquement sur forced/transition.
         if (forced) {
             animator.reset(); // Redraw rainbow background
@@ -210,15 +226,16 @@ void loop() {
     M5.update();
     buttonManager.update();
     
-    // Chaton Fat easter egg: long press on C button (only outside SHOWING_REQUEST)
+    // Config menu trigger: long press on C button (1000ms) from IDLE/DONE
+    // Chaton Fat is now a menu item, not a direct toggle
     static uint32_t buttonCHoldStart = 0;
-    static bool buttonCTracking = false;     // mesure d'un appui en cours
-    static bool buttonCWaitRelease = false;  // toggle fait : attendre le relâchement
+    static bool buttonCTracking = false;     // measuring a press in progress
+    static bool buttonCWaitRelease = false;  // long-press done: wait for release
     uint32_t now = ::millis();
 
+    // Only track long-press for config menu when in IDLE or DONE (not during SHOWING_REQUEST)
     if (currentState == AppState::SHOWING_REQUEST) {
-        // C = annuler ici. On ne mesure rien, et si C est enfoncé on exigera un
-        // relâchement avant de réarmer le toggle en sortant de cet état.
+        // C = cancel here. Don't track for config menu.
         buttonCTracking = false;
         buttonCWaitRelease = buttonManager.isHeld(AppButton::C);
     } else if (buttonManager.isHeld(AppButton::C)) {
@@ -226,12 +243,19 @@ void loop() {
             if (!buttonCTracking) {
                 buttonCTracking = true;
                 buttonCHoldStart = now;
-            } else if (now - buttonCHoldStart >= 1500) {
-                chatonFatMode = !chatonFatMode;
-                buttonManager.vibrate(100, 50);
-                forceRedraw = true;
+            } else if (now - buttonCHoldStart >= 1000) {
+                // Open config menu instead of toggling Chaton Fat
+                if (currentState == AppState::IDLE || currentState == AppState::DONE) {
+                    prevState = currentState;
+                    currentState = AppState::CONFIG_MENU;
+                    configMenu.open();
+                    forceRedraw = true;
+                }
+                if (!configManager.get().quietMode) {
+                    buttonManager.vibrate(100, 50);
+                }
                 buttonCTracking = false;
-                buttonCWaitRelease = true; // pas de re-toggle tant que C reste enfoncé
+                buttonCWaitRelease = true; // wait for release before re-triggering
             }
         }
     } else {
@@ -249,7 +273,11 @@ void loop() {
         
         if (msgType == MessageType::APPROVAL_REQUEST) {
             // Approval has priority over status states
-            prevState = currentState;
+            // If we're in CONFIG_MENU, store that we came from the menu
+            // but keep the original prevState so we return to IDLE/DONE after approval
+            if (currentState != AppState::CONFIG_MENU) {
+                prevState = currentState;
+            }
             currentState = AppState::SHOWING_REQUEST;
             ledFlourishDone = true; // Reset flourish flag
         }
@@ -345,7 +373,8 @@ void loop() {
     // large sur les 5 bandes), le chat se redessine par-dessus le centre.
     auto isFullScreen = [](AppState s) {
         return s == AppState::WELCOME || s == AppState::DEAD || s == AppState::STUCK
-            || s == AppState::ERROR_STATE || s == AppState::SHOWING_REQUEST;
+            || s == AppState::ERROR_STATE || s == AppState::SHOWING_REQUEST
+            || s == AppState::CONFIG_MENU;
     };
     if (justEntered && isFullScreen(prevRendered) && !isFullScreen(currentState)) {
         animator.reset();   // repeint le rainbow plein écran (320x240)
@@ -447,6 +476,33 @@ void loop() {
             break;
         }
         
+        case AppState::CONFIG_MENU: {
+            // Draw config menu
+            if (justEntered) {
+                configMenu.draw(true);
+            } else {
+                configMenu.draw();
+            }
+            
+            // Handle menu navigation
+            bool btnAPressed = buttonManager.wasPressed(AppButton::A);
+            bool btnBPressed = buttonManager.wasPressed(AppButton::B);
+            bool btnCPressed = buttonManager.wasPressed(AppButton::C);
+            bool btnCHeld = buttonManager.isHeld(AppButton::C);
+            
+            if (!configMenu.update(btnAPressed, btnBPressed, btnCPressed, btnCHeld)) {
+                // Menu closed, return to previous state
+                currentState = prevState;
+                forceRedraw = true;
+            }
+            
+            // Apply LED brightness if it changed in menu
+            led::setBrightness(configManager.get().ledBrightness);
+            
+            led::idle();  // Keep a subtle LED animation in config menu
+            break;
+        }
+        
         case AppState::SHOWING_REQUEST: {
             const char* title = serialProtocol.getRequestTitle();
             const char* body = serialProtocol.getRequestBody();
@@ -467,7 +523,9 @@ void loop() {
                 }
                 
                 serialProtocol.sendResponse(requestId, approxResponse);
-                buttonManager.vibrate(100, 50); // Short vibration feedback
+                if (!configManager.get().quietMode) {
+                    buttonManager.vibrate(100, 50); // Short vibration feedback
+                }
             } else {
                 // Timeout - send cancelled
                 serialProtocol.sendResponse(requestId, ApprovalResponse::CANCELLED);
