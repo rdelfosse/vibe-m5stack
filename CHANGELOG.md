@@ -9,6 +9,22 @@ En pré-1.0, la version *minor* (0.X.0) est incrémentée pour les nouvelles fon
 et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
+## [0.4.0] - 2026-08-08
+
+### Ajouté
+- Menu de configuration sur le device : appui long **C** (~1 s) depuis IDLE/DONE,
+  navigation C (suivant) / B (précédent), sélection A, sortie via « Exit » ou appui long C
+- **Quiet mode** : coupe vibrations et bips (approbations, alarmes watchdog)
+- **Luminosité LED** réglable (16 / 32 / 64 / 128 / 255), appliquée au boot
+- Sélecteur de « modèle » : Mistral (chat animé) ou easter egg **Chaton Fat** 😼
+  (sprite fixe corps blanc/contour noir + faux bandeau « le nouveau modèle Mistral »)
+- Persistance **NVS** (Preferences) : magic byte de validation, défauts sûrs sur
+  device neuf (quiet OFF, luminosité 32, modèle Mistral)
+
+### Changé
+- `ButtonManager::isHeld()` renvoie un vrai niveau (bouton maintenu) au lieu d'un
+  front — base des appuis longs du menu
+
 ## [0.3.1] - 2026-08-08
 
 ### Changé
