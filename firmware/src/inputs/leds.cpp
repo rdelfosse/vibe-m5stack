@@ -263,6 +263,11 @@ void begin() {
     off();
 }
 
+void setBrightness(uint8_t brightness) {
+    FastLED.setBrightness(brightness);
+    FastLED.show();
+}
+
 void off() {
     clear(ring,    RING_LEDS);
     clear(matrixB, MATRIX_LEDS);

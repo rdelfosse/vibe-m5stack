@@ -25,6 +25,9 @@ namespace led {
 void begin();
 void off();
 
+// Set global LED brightness (calls FastLED.setBrightness)
+void setBrightness(uint8_t brightness);
+
 // Call repeatedly while waiting for the user's button press.
 // Throttles itself; safe to call every loop tick.
 //  - side ring (10 LEDs, GPIO 15) : Mistral palette chase

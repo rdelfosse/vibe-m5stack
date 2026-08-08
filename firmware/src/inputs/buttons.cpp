@@ -20,6 +20,7 @@ ButtonManager::ButtonManager() {
         prevStates[i] = false;
         currStates[i] = false;
         pressedFlags[i] = false;
+        heldStates[i] = false;
     }
 }
 
@@ -33,7 +34,13 @@ void ButtonManager::update() {
     currStates[0] = M5.BtnA.wasPressed();
     currStates[1] = M5.BtnB.wasPressed();
     currStates[2] = M5.BtnC.wasPressed();
-    
+
+    // Niveau « maintenu » : isPressed() reste vrai tant que le bouton est enfoncé
+    // (wasPressed n'est qu'un front d'une frame -> inutilisable pour un appui long).
+    heldStates[0] = M5.BtnA.isPressed();
+    heldStates[1] = M5.BtnB.isPressed();
+    heldStates[2] = M5.BtnC.isPressed();
+
     // Set pressed flags for rising edge detection
     for (int i = 0; i < 3; i++) {
         if (currStates[i] && !prevStates[i]) {
@@ -49,7 +56,7 @@ bool ButtonManager::wasPressed(AppButton btn) {
 }
 
 bool ButtonManager::isHeld(AppButton btn) {
-    return currStates[static_cast<int>(btn)];
+    return heldStates[static_cast<int>(btn)];
 }
 
 void ButtonManager::vibrate(uint8_t intensity, uint16_t duration) {
