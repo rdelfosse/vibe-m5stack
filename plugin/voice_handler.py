@@ -13,7 +13,9 @@ import threading
 
 from plugin.voice import get_voice_input
 
-logger = logging.getLogger(__name__)
+# Enfant du logger du hook : hérite de son FileHandler (~/.vibe/logs/
+# m5stack_hook.log) — sinon les traces voix partent dans le vide.
+logger = logging.getLogger("m5stack_hook.voice")
 
 # Message de refus par défaut quand la consigne vocale est vide/indisponible.
 DEFAULT_REJECT_REASON = "User rejected via M5Stack"

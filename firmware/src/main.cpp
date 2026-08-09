@@ -263,11 +263,16 @@ void loop() {
 
     if (inVoiceEligibleState) {
         // Button A tracking for long-press
-        bool aEligible = (currentState == AppState::IDLE || 
+        bool aEligible = (currentState == AppState::IDLE ||
                          currentState == AppState::WELCOME ||
                          currentState == AppState::SHOWING_REQUEST);
+        // Une fois en LISTENING (long-press A parti), le bouton porteur doit
+        // rester suivi jusqu'au relâchement — sinon la branche « release »
+        // se déclenche à la frame suivante avec le bouton encore enfoncé et
+        // la session vocale dure 16 ms.
+        bool aHolding = (currentState == AppState::LISTENING && buttonALongFired);
 
-        if (aEligible && buttonManager.isHeld(AppButton::A)) {
+        if ((aEligible || aHolding) && buttonManager.isHeld(AppButton::A)) {
             if (!buttonATracking) {
                 buttonATracking = true;
                 buttonAHoldStart = now;
@@ -324,8 +329,10 @@ void loop() {
 
         // Button B tracking for long-press
         bool bEligible = (currentState == AppState::SHOWING_REQUEST);
+        // Même principe que aHolding : suivre B jusqu'au relâchement en LISTENING.
+        bool bHolding = (currentState == AppState::LISTENING && buttonBLongFired);
 
-        if (bEligible && buttonManager.isHeld(AppButton::B)) {
+        if ((bEligible || bHolding) && buttonManager.isHeld(AppButton::B)) {
             if (!buttonBTracking) {
                 buttonBTracking = true;
                 buttonBHoldStart = now;
