@@ -22,6 +22,7 @@ enum class ConfigMenuItem {
     LED_BRIGHTNESS,
     DEVICE_MODEL,
     DEBUG_MODE,
+    MIC_SOURCE,
     EXIT,
     COUNT
 };

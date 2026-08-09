@@ -57,6 +57,10 @@ class VoiceInput:
         self._has_api_key = bool(self._get_api_key())
         return self._has_sounddevice and self._has_mistralai and self._has_api_key
 
+    def transcription_available(self):
+        """Micro device : seule la transcription est côté PC (pas de sounddevice)."""
+        return self._has_mistralai and bool(self._get_api_key())
+
     def availability_detail(self):
         """Pour les logs : dit précisément ce qui manque."""
         return (f"sounddevice={self._has_sounddevice} "
@@ -191,3 +195,38 @@ def get_voice_input():
     if _voice_input is None:
         _voice_input = VoiceInput()
     return _voice_input
+
+
+# -- Audio micro device (µ-law streamé par le M5Stack) -----------------------
+
+_ULAW_LUT = None
+
+
+def _ulaw_lut():
+    """Table G.711 µ-law -> PCM16 (256 entrées, construite une fois)."""
+    global _ULAW_LUT
+    if _ULAW_LUT is None:
+        lut = []
+        for byte in range(256):
+            u = ~byte & 0xFF
+            sign = u & 0x80
+            exponent = (u >> 4) & 0x07
+            mantissa = u & 0x0F
+            sample = (((mantissa << 3) + 0x84) << exponent) - 0x84
+            lut.append(-sample if sign else sample)
+        _ULAW_LUT = lut
+    return _ULAW_LUT
+
+
+def ulaw_to_wav(ulaw_bytes):
+    """Décode un flux µ-law 16 kHz mono (micro du device) en WAV PCM16."""
+    import struct
+    lut = _ulaw_lut()
+    pcm = struct.pack(f"<{len(ulaw_bytes)}h", *(lut[b] for b in ulaw_bytes))
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, 'wb') as wav_file:
+        wav_file.setnchannels(CHANNELS)
+        wav_file.setsampwidth(SAMPLE_WIDTH)
+        wav_file.setframerate(SAMPLE_RATE)
+        wav_file.writeframes(pcm)
+    return wav_buffer.getvalue()

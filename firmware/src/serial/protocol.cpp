@@ -93,7 +93,8 @@ void SerialProtocol::sendAck(uint32_t requestId) {
     serializeJson(txDoc, bridgeSerial); bridgeSerial.println();
 }
 
-void SerialProtocol::sendVoiceEvent(VoiceAction action, VoiceMode mode, uint32_t sessionId, uint32_t requestId) {
+void SerialProtocol::sendVoiceEvent(VoiceAction action, VoiceMode mode, uint32_t sessionId,
+                                    uint32_t requestId, bool micDevice) {
     txDoc.clear(); txDoc["type"] = "voice";
     const char* actionStr = (action == VoiceAction::START) ? "start" : "stop";
     txDoc["action"] = actionStr;
@@ -105,6 +106,7 @@ void SerialProtocol::sendVoiceEvent(VoiceAction action, VoiceMode mode, uint32_t
         default: modeStr = "prompt"; break;
     }
     txDoc["mode"] = modeStr; txDoc["id"] = requestId; txDoc["session"] = sessionId;
+    txDoc["mic"] = micDevice ? "device" : "pc";
     serializeJson(txDoc, bridgeSerial); bridgeSerial.println();
 }
 

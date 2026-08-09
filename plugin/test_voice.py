@@ -179,3 +179,69 @@ def test_stale_session_is_reset_on_new_start():
     run_session(handler, "prompt")
     assert wait_until(lambda: rec.injected == ["apres reboot"])
     assert fake.cancelled  # la session zombie a été annulée proprement
+
+
+# -- Micro device (chunks µ-law streamés) --------------------------------------
+
+import base64
+
+
+def add_transcription_available(fake):
+    fake.transcription_available = lambda: fake.available
+    return fake
+
+
+def run_device_session(handler, mode, request_id=0, ulaw=bytes(256) * 20):
+    handler.handle_voice_message(
+        {"type": "voice", "action": "start", "mode": mode, "id": request_id, "mic": "device"}
+    )
+    handler.handle_voice_message(
+        {"type": "voice", "action": "stop", "mode": mode, "id": request_id, "mic": "device"}
+    )
+    # chunks streamés (pendant + après le stop, comme le vrai firmware)
+    for i in range(0, len(ulaw), 1024):
+        chunk = ulaw[i:i + 1024]
+        handler.handle_audio_chunk(
+            {"type": "audio", "seq": i // 1024, "data": base64.b64encode(chunk).decode()}
+        )
+    handler.handle_audio_end({"type": "audio_end", "total": len(ulaw)})
+
+
+def test_device_prompt_injects_transcription():
+    fake = add_transcription_available(FakeVoiceInput(text="depuis le canape"))
+    handler, rec = make_handler(fake)
+    run_device_session(handler, "prompt")
+    assert wait_until(lambda: rec.injected == ["depuis le canape"])
+    assert rec.resolved == []
+
+
+def test_device_reject_resolves_with_reason():
+    fake = add_transcription_available(FakeVoiceInput(text="non refais le en python"))
+    handler, rec = make_handler(fake)
+    run_device_session(handler, "reject", request_id=11)
+    assert wait_until(lambda: rec.resolved == [(11, False, "non refais le en python")])
+    assert rec.injected == []
+
+
+def test_device_audio_too_short_rejects_fallback():
+    fake = add_transcription_available(FakeVoiceInput())
+    handler, rec = make_handler(fake)
+    run_device_session(handler, "reject", request_id=4, ulaw=bytes(100))
+    assert wait_until(lambda: len(rec.resolved) == 1)
+    assert rec.resolved[0][0] == 4 and rec.resolved[0][1] is False
+    assert rec.injected == []
+
+
+def test_device_audio_end_without_session_is_noop():
+    fake = add_transcription_available(FakeVoiceInput())
+    handler, rec = make_handler(fake)
+    handler.handle_audio_end({"type": "audio_end", "total": 0})  # ne doit pas lever
+    assert rec.resolved == [] and rec.injected == []
+
+
+def test_device_session_does_not_touch_pc_mic():
+    fake = add_transcription_available(FakeVoiceInput(text="ok"))
+    fake.record_start = lambda: (_ for _ in ()).throw(AssertionError("PC mic touched!"))
+    handler, rec = make_handler(fake)
+    run_device_session(handler, "prompt")
+    assert wait_until(lambda: rec.injected == ["ok"])

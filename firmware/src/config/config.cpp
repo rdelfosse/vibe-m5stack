@@ -26,6 +26,7 @@ static const char* NVS_KEY_QUIET = "quiet";
 static const char* NVS_KEY_BRIGHT = "bright";
 static const char* NVS_KEY_MODEL = "model";
 static const char* NVS_KEY_DEBUG = "debug";
+static const char* NVS_KEY_MIC = "mic";
 
 // Magic byte value to detect valid configuration
 static const uint8_t CONFIG_MAGIC = 0x42;
@@ -140,6 +141,14 @@ void ConfigManager::toggleDebugMode() {
     }
 }
 
+void ConfigManager::toggleMicSource() {
+    currentConfig.micSource = (currentConfig.micSource == MicSource::DEVICE)
+        ? MicSource::PC : MicSource::DEVICE;
+    if (initialized) {
+        save();
+    }
+}
+
 bool ConfigManager::load() {
     Preferences preferences;
     
@@ -157,6 +166,8 @@ bool ConfigManager::load() {
     // Load configuration
     currentConfig.quietMode = preferences.getBool(NVS_KEY_QUIET, false);
     currentConfig.debugMode = preferences.getBool(NVS_KEY_DEBUG, false);
+    uint8_t micValue = preferences.getUChar(NVS_KEY_MIC, 0);
+    currentConfig.micSource = (micValue == 1) ? MicSource::PC : MicSource::DEVICE;
     
     uint8_t brightness = preferences.getUChar(NVS_KEY_BRIGHT, 32);
     // Validate brightness is in our list
@@ -191,6 +202,7 @@ bool ConfigManager::save() {
     // Save configuration
     preferences.putBool(NVS_KEY_QUIET, currentConfig.quietMode);
     preferences.putBool(NVS_KEY_DEBUG, currentConfig.debugMode);
+    preferences.putUChar(NVS_KEY_MIC, currentConfig.micSource == MicSource::PC ? 1 : 0);
     preferences.putUChar(NVS_KEY_BRIGHT, currentConfig.ledBrightness);
     preferences.putUChar(NVS_KEY_MODEL, static_cast<uint8_t>(currentConfig.model));
     
@@ -201,6 +213,7 @@ bool ConfigManager::save() {
 void ConfigManager::applyDefaults() {
     currentConfig.quietMode = false;
     currentConfig.debugMode = false;   // debug OFF par défaut (logs sobres)
+    currentConfig.micSource = MicSource::DEVICE;  // micro embarqué par défaut
     currentConfig.ledBrightness = 32;
     currentConfig.model = DeviceModel::MISTRAL;
 }

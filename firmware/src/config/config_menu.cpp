@@ -91,9 +91,9 @@ void ConfigMenu::draw(bool forced) {
     M5.Lcd.setTextFont(2);
     M5.Lcd.setTextSize(1);
     
-    // 5 items : 48 + 5*34 = 218 < 225 (bandeau d'aide) — tient sur 240 px.
-    const int ITEM_HEIGHT = 34;
-    const int ITEM_Y_START = 48;
+    // 6 items : 44 + 6*29 = 218 < 225 (bandeau d'aide) — tient sur 240 px.
+    const int ITEM_HEIGHT = 29;
+    const int ITEM_Y_START = 44;
     const int ITEM_X = 20;
     const int SELECTOR_X = 5;
     
@@ -128,6 +128,11 @@ void ConfigMenu::draw(bool forced) {
             case ConfigMenuItem::DEBUG_MODE: {
                 const char* debugStr = configManager.get().debugMode ? "ON" : "OFF";
                 M5.Lcd.printf("Debug: > %s\n", debugStr);
+                break;
+            }
+            case ConfigMenuItem::MIC_SOURCE: {
+                const char* micStr = (configManager.get().micSource == MicSource::PC) ? "PC" : "Device";
+                M5.Lcd.printf("Mic: > %s\n", micStr);
                 break;
             }
             case ConfigMenuItem::EXIT:
@@ -195,6 +200,9 @@ void ConfigMenu::selectItem() {
             break;
         case ConfigMenuItem::DEBUG_MODE:
             configManager.toggleDebugMode();
+            break;
+        case ConfigMenuItem::MIC_SOURCE:
+            configManager.toggleMicSource();
             break;
         case ConfigMenuItem::EXIT:
             // Handled in update()

@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include <M5Stack.h>
+#include <mbedtls/base64.h>
+#include "audio/mic_capture.h"
 #include "config/config.h"
 #include "config/config_menu.h"
 #include "display/anim.h"
@@ -76,6 +78,70 @@ ThinkingActivity currentThinkingActivity = ThinkingActivity::REASONING;
 static uint32_t voiceSessionId = 0;
 static VoiceMode voiceMode = VoiceMode::PROMPT;
 static uint32_t voiceRequestId = 0;
+static bool voiceMicDevice = false;   // session en cours : micro embarqué ?
+
+// -- Streaming audio (micro device) : machine à états non bloquante ---------
+// Les chunks µ-law (1 Ko brut -> ~1,4 Ko base64) partent PENDANT
+// l'enregistrement, dès qu'un chunk complet est disponible. Au relâchement
+// (streamFinishing), on vide le reliquat puis on envoie audio_end.
+static bool audioStreamActive = false;     // session de streaming en cours
+static bool audioStreamFinishing = false;  // capture stoppée : vider puis clore
+static size_t audioStreamPos = 0;
+static uint32_t audioStreamSeq = 0;
+
+static void startAudioStream() {
+    audioStreamActive = true;
+    audioStreamFinishing = false;
+    audioStreamPos = 0;
+    audioStreamSeq = 0;
+}
+
+static void finishAudioStream() {
+    audioStreamFinishing = true;
+}
+
+static void pumpAudioStream() {
+    if (!audioStreamActive) return;
+    const uint8_t* data = micCaptureData();
+    size_t total = micCaptureSize();
+    static const size_t CHUNK = 1024;
+
+    if (data == nullptr) {
+        audioStreamActive = false;
+        return;
+    }
+
+    // Fin de session : tout est parti -> clore et libérer.
+    if (audioStreamFinishing && audioStreamPos >= total) {
+        bridgeSerial.printf("{\"type\":\"audio_end\",\"seq\":%u,\"total\":%u}\n",
+                            (unsigned)audioStreamSeq, (unsigned)total);
+        audioStreamActive = false;
+        micCaptureRelease();
+        return;
+    }
+
+    // Pendant la capture : n'envoyer que des chunks pleins (évite de saturer
+    // le lien de petits messages). En finition : envoyer le reliquat partiel.
+    size_t available = total - audioStreamPos;
+    if (available == 0) return;
+    if (!audioStreamFinishing && available < CHUNK) return;
+
+    size_t n = (available > CHUNK) ? CHUNK : available;
+    static unsigned char b64[((CHUNK + 2) / 3) * 4 + 8];
+    size_t b64len = 0;
+    if (mbedtls_base64_encode(b64, sizeof(b64) - 1, &b64len,
+                              data + audioStreamPos, n) != 0) {
+        audioStreamActive = false;
+        micCaptureRelease();
+        return;
+    }
+    b64[b64len] = 0;
+    bridgeSerial.printf("{\"type\":\"audio\",\"seq\":%u,\"data\":\"", (unsigned)audioStreamSeq);
+    bridgeSerial.print((const char*)b64);
+    bridgeSerial.print("\"}\n");
+    audioStreamSeq++;
+    audioStreamPos += n;
+}
 
 // Button A long-press tracking for voice
 static bool buttonATracking = false;
@@ -297,7 +363,17 @@ void loop() {
                     currentState = AppState::LISTENING;
                     forceRedraw = true;
                 }
-                serialProtocol.sendVoiceEvent(VoiceAction::START, voiceMode, voiceSessionId, voiceRequestId);
+                // Micro embarqué (défaut) : démarrer la capture I2S ; fallback
+                // micro PC si l'init échoue (I2S/PSRAM indisponibles).
+                voiceMicDevice = (configManager.get().micSource == MicSource::DEVICE);
+                if (voiceMicDevice && !micCaptureStart()) {
+                    voiceMicDevice = false;
+                }
+                if (voiceMicDevice) {
+                    startAudioStream();  // les chunks partent pendant la capture
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::START, voiceMode, voiceSessionId,
+                                              voiceRequestId, voiceMicDevice);
                 voiceSessionId++;
                 buttonManager.wasPressed(AppButton::A);
             }
@@ -305,14 +381,30 @@ void loop() {
             buttonATracking = false;
             if (buttonALongFired) {
                 buttonALongFired = false;
-                serialProtocol.sendVoiceEvent(VoiceAction::STOP, voiceMode, voiceSessionId - 1, voiceRequestId);
+                if (voiceMicDevice) {
+                    micCaptureStop();
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::STOP, voiceMode, voiceSessionId - 1,
+                                              voiceRequestId, voiceMicDevice);
+                if (voiceMicDevice) {
+                    finishAudioStream();
+                }
                 if (voiceMode == VoiceMode::APPROVE) {
                     serialProtocol.sendResponse(voiceRequestId, ApprovalResponse::APPROVED);
                     if (!configManager.get().quietMode) {
                         buttonManager.vibrate(100, 50);
                     }
+                    // L'action est approuvée : retour immédiat, le commentaire
+                    // s'uploade et se transcrit en arrière-plan.
+                    currentState = prevState;
+                } else if (voiceMicDevice) {
+                    // prompt + micro device : l'upload/transcription prend
+                    // quelques secondes -> écran TRANSCRIBING (sortie sur ack).
+                    currentState = AppState::TRANSCRIBING;
+                    transcribingStartTime = now;
+                } else {
+                    currentState = prevState;
                 }
-                currentState = prevState;
                 forceRedraw = true;
             } else {
                 if (currentState == AppState::SHOWING_REQUEST) {
@@ -349,7 +441,15 @@ void loop() {
                 prevState = currentState;
                 currentState = AppState::LISTENING;
                 forceRedraw = true;
-                serialProtocol.sendVoiceEvent(VoiceAction::START, voiceMode, voiceSessionId, voiceRequestId);
+                voiceMicDevice = (configManager.get().micSource == MicSource::DEVICE);
+                if (voiceMicDevice && !micCaptureStart()) {
+                    voiceMicDevice = false;
+                }
+                if (voiceMicDevice) {
+                    startAudioStream();  // les chunks partent pendant la capture
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::START, voiceMode, voiceSessionId,
+                                              voiceRequestId, voiceMicDevice);
                 voiceSessionId++;
                 buttonManager.wasPressed(AppButton::B);
             }
@@ -357,7 +457,14 @@ void loop() {
             buttonBTracking = false;
             if (buttonBLongFired) {
                 buttonBLongFired = false;
-                serialProtocol.sendVoiceEvent(VoiceAction::STOP, voiceMode, voiceSessionId - 1, voiceRequestId);
+                if (voiceMicDevice) {
+                    micCaptureStop();
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::STOP, voiceMode, voiceSessionId - 1,
+                                              voiceRequestId, voiceMicDevice);
+                if (voiceMicDevice) {
+                    finishAudioStream();
+                }
                 currentState = AppState::TRANSCRIBING;
                 transcribingStartTime = now;
                 forceRedraw = true;
@@ -401,6 +508,14 @@ void loop() {
         buttonBTracking = false;
         buttonBLongFired = false;
     }
+
+    // Micro embarqué : drainer le DMA pendant l'enregistrement, et pousser
+    // l'upload chunk par chunk après le relâchement (non bloquant, quel que
+    // soit l'état courant — un commentaire d'approve s'uploade en arrière-plan).
+    if (currentState == AppState::LISTENING && voiceMicDevice) {
+        micCapturePump();
+    }
+    pumpAudioStream();
 
     // Annonce du mode debug au PC : au boot et à chaque changement (le menu
     // peut le toggler à tout moment). Les pings le portent aussi (reconnexion).

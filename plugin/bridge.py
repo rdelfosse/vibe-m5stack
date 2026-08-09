@@ -246,8 +246,10 @@ class M5StackBridge:
                                     if "debug" in msg:
                                         self._apply_debug_flag(msg.get("debug"))
                                     continue
-                                # Route voice messages directly to voice handler
-                                if isinstance(msg, dict) and msg.get("type") == "voice":
+                                # Route voice/audio messages directly to voice handler
+                                if isinstance(msg, dict) and msg.get("type") in (
+                                    "voice", "audio", "audio_end"
+                                ):
                                     self._handle_voice_message(msg)
                                     continue
                                 self.message_queue.put(msg)
@@ -274,11 +276,17 @@ class M5StackBridge:
             logger.warning(f"Could not apply debug flag: {e}")
 
     def _handle_voice_message(self, msg):
-        """Handle incoming voice message by routing to voice handler."""
+        """Route les messages voix/audio du device vers le voice handler."""
         try:
             from plugin.voice_handler import get_voice_handler
             handler = get_voice_handler()
-            handler.handle_voice_message(msg)
+            msg_type = msg.get("type")
+            if msg_type == "voice":
+                handler.handle_voice_message(msg)
+            elif msg_type == "audio":
+                handler.handle_audio_chunk(msg)
+            elif msg_type == "audio_end":
+                handler.handle_audio_end(msg)
         except ImportError:
             # voice_handler might not be available during testing
             logger.debug(f"Voice message received but voice_handler not available: {msg}")

@@ -35,6 +35,10 @@ class VoiceHandler:
         self._resolve_approval_callback = None
         self._send_voice_ack_callback = None
 
+        # Session micro device : l'audio arrive en chunks µ-law base64 streamés
+        # par le M5Stack pendant l'enregistrement, clos par audio_end.
+        self._device_session = None  # {mode, id, data: bytearray, timer}
+
     def set_inject_callback(self, callback):
         self._inject_callback = callback
 
@@ -53,14 +57,116 @@ class VoiceHandler:
         action = msg.get("action")
         mode = msg.get("mode", "prompt")
         request_id = msg.get("id", 0)
+        mic = msg.get("mic", "pc")
 
-        logger.info(f"Voice message: action={action}, mode={mode}, id={request_id}")
+        logger.info(f"Voice message: action={action}, mode={mode}, id={request_id}, mic={mic}")
 
         with self._lock:
-            if action == "start":
-                self._handle_voice_start(mode, request_id)
-            elif action == "stop":
-                self._handle_voice_stop(mode, request_id)
+            if mic == "device":
+                if action == "start":
+                    self._device_start(mode, request_id)
+                # stop : rien à faire, les chunks/audio_end suivent d'eux-mêmes
+            else:
+                if action == "start":
+                    self._handle_voice_start(mode, request_id)
+                elif action == "stop":
+                    self._handle_voice_stop(mode, request_id)
+
+    # -- Session micro device ------------------------------------------------
+
+    def _device_start(self, mode, request_id):
+        self._cancel_device_session()
+        timer = threading.Timer(90.0, self._device_timeout)
+        timer.daemon = True
+        timer.start()
+        self._device_session = {
+            "mode": mode,
+            "id": request_id,
+            "data": bytearray(),
+            "timer": timer,
+        }
+        logger.info(f"Device mic session started (mode={mode}, id={request_id})")
+
+    def handle_audio_chunk(self, msg):
+        import base64
+        with self._lock:
+            if self._device_session is None:
+                return
+            try:
+                self._device_session["data"] += base64.b64decode(msg.get("data", ""))
+            except Exception:
+                logger.warning("Invalid audio chunk dropped")
+
+    def handle_audio_end(self, msg):
+        with self._lock:
+            session = self._device_session
+            self._device_session = None
+            if session is None:
+                logger.warning("audio_end without device session")
+                return
+            session["timer"].cancel()
+
+        data = bytes(session["data"])
+        total = msg.get("total")
+        if total is not None and total != len(data):
+            logger.warning(f"Audio incomplete: {len(data)}/{total} octets (chunks perdus)")
+
+        mode, request_id = session["mode"], session["id"]
+        duration_ms = len(data) * 1000 // 16000  # µ-law 16 kHz : 1 octet/éch.
+        logger.info(f"Device audio received: {len(data)} octets (~{duration_ms} ms)")
+
+        if len(data) < 1600:  # < 100 ms : rien d'exploitable
+            logger.warning("Device audio too short")
+            self._send_ack("done", "")
+            self._resolve_reject_fallback(mode, request_id, DEFAULT_REJECT_REASON)
+            return
+
+        from plugin.voice import ulaw_to_wav
+        try:
+            wav_data = ulaw_to_wav(data)
+        except Exception:
+            logger.exception("ulaw decode failed")
+            self._send_ack("done", "")
+            self._resolve_reject_fallback(mode, request_id, DEFAULT_REJECT_REASON)
+            return
+
+        self._maybe_dump_debug(wav_data)
+        self._send_ack("transcribing", "")
+
+        if not self._voice_input.transcription_available():
+            logger.error(
+                "Transcription not available: " + self._voice_input.availability_detail()
+            )
+            self._send_ack("done", "")
+            self._resolve_reject_fallback(
+                mode, request_id, DEFAULT_REJECT_REASON + " (voice unavailable)"
+            )
+            return
+
+        do_inject = mode in ("prompt", "approve")
+        reject_id = request_id if mode == "reject" else None
+        threading.Thread(
+            target=self._transcribe_thread,
+            args=(wav_data, do_inject, reject_id),
+            daemon=True,
+            name="voice-transcribe",
+        ).start()
+
+    def _device_timeout(self):
+        with self._lock:
+            session = self._device_session
+            self._device_session = None
+        if session is not None:
+            logger.error("Device mic session timeout (audio_end jamais reçu)")
+            self._send_ack("done", "")
+            self._resolve_reject_fallback(
+                session["mode"], session["id"], DEFAULT_REJECT_REASON + " (timeout)"
+            )
+
+    def _cancel_device_session(self):
+        if self._device_session is not None:
+            self._device_session["timer"].cancel()
+            self._device_session = None
 
     def _handle_voice_start(self, mode, request_id):
         if self._recording:
@@ -99,21 +205,7 @@ class VoiceHandler:
             self._resolve_reject_fallback(mode, request_id, DEFAULT_REJECT_REASON)
             return
 
-        # Mode debug (item du menu config du device, OFF par défaut) : garder
-        # la dernière capture sur disque pour audit. L'audio est une donnée
-        # sensible — jamais persistée hors debug explicite.
-        from plugin import runtime_flags
-        if runtime_flags.debug_enabled():
-            try:
-                from pathlib import Path
-                dump = Path.home() / ".vibe" / "logs" / "last_ptt.wav"
-                dump.write_bytes(wav_data)
-                duration_ms = max(0, (len(wav_data) - 44)) // 32  # 16 kHz mono 16-bit
-                logger.info(
-                    f"[debug] Audio capture: {len(wav_data)} octets (~{duration_ms} ms) -> {dump}"
-                )
-            except Exception:
-                logger.exception("Could not dump last_ptt.wav")
+        self._maybe_dump_debug(wav_data)
 
         if mode not in ("prompt", "approve", "reject"):
             logger.warning(f"Unknown mode: {mode}")
@@ -187,6 +279,24 @@ class VoiceHandler:
         """Un reject sans transcription doit quand même refuser l'action."""
         if mode == "reject":
             self._resolve(request_id, reason)
+
+    def _maybe_dump_debug(self, wav_data):
+        """Mode debug (menu config du device, OFF par défaut) : garder la
+        dernière capture sur disque pour audit. L'audio est une donnée
+        sensible — jamais persistée hors debug explicite."""
+        from plugin import runtime_flags
+        if not runtime_flags.debug_enabled():
+            return
+        try:
+            from pathlib import Path
+            dump = Path.home() / ".vibe" / "logs" / "last_ptt.wav"
+            dump.write_bytes(wav_data)
+            duration_ms = max(0, (len(wav_data) - 44)) // 32  # 16 kHz mono 16-bit
+            logger.info(
+                f"[debug] Audio capture: {len(wav_data)} octets (~{duration_ms} ms) -> {dump}"
+            )
+        except Exception:
+            logger.exception("Could not dump last_ptt.wav")
 
     def _send_ack(self, state, text):
         if self._send_voice_ack_callback:

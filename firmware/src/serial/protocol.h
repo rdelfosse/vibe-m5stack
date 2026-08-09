@@ -33,7 +33,10 @@ public:
     bool receive();
     void sendResponse(uint32_t requestId, ApprovalResponse response);
     void sendAck(uint32_t requestId);
-    void sendVoiceEvent(VoiceAction action, VoiceMode mode, uint32_t sessionId, uint32_t requestId);
+    // micDevice : true = l'audio sera capturé sur le device et uploadé
+    // (messages "audio"/"audio_end"), false = le PC enregistre avec son micro.
+    void sendVoiceEvent(VoiceAction action, VoiceMode mode, uint32_t sessionId,
+                        uint32_t requestId, bool micDevice = false);
     void sendVoiceAck(VoiceAckState state, const char* text = nullptr);
     MessageType getMessageType() const;
     const char* getRequestTitle() const;
