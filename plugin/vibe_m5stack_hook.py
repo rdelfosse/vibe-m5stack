@@ -592,9 +592,19 @@ def install_hook():
         handler = get_voice_handler()
 
         async def _submit_voice_text(tui, text: str):
-            # Même chemin que la saisie clavier : démarre un tour si la TUI est
-            # libre, sinon met en file comme un message utilisateur en attente.
-            if tui._is_busy():
+            # TUI libre : soumettre comme un vrai message (démarre un tour).
+            # Agent occupé : injecter dans le tour EN COURS — le drain se fait
+            # entre deux étapes LLM, donc la todo en tient compte tout de
+            # suite. (La file TUI, elle, ne délivre qu'à la fin de la todo —
+            # trop tard pour un commentaire d'approve.)
+            if tui._is_busy() and _agent_loop is not None:
+                await _agent_loop.inject_user_context(text)
+                try:
+                    tui.notify(f"Voix -> tour en cours : {text[:60]}",
+                               title="M5Stack", timeout=4)
+                except Exception:
+                    pass
+            elif tui._is_busy():
                 await tui._handle_queue_submit(text, reject_hint="voice input rejected")
             else:
                 await tui._handle_user_message(text)
