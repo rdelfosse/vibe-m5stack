@@ -82,8 +82,6 @@ static VoiceMode voiceMode = VoiceMode::PROMPT;
 static uint32_t voiceRequestId = 0;
 static bool voiceMicDevice = false;   // session en cours : micro embarqué ?
 
-// TTS state tracking
-static bool ttsButtonConsumed[3] = {false, false, false};  // A, B, C - front consommé par TTS stop
 
 // -- Streaming audio (micro device) : machine à états non bloquante ---------
 // Les chunks µ-law (1 Ko brut -> ~1,4 Ko base64) partent PENDANT
@@ -311,23 +309,21 @@ void loop() {
     
     uint32_t now = ::millis();
 
-    // TTS interruption by any button (P3): stop playback and consume the press front
-    // "Tout bouton = stop (P3), sans déclencher l'action normale du bouton (consommer le front)"
-    for (int i = 0; i < 3; i++) {
-        AppButton btn = static_cast<AppButton>(i);
-        if (buttonManager.wasPressed(btn) && !ttsButtonConsumed[i]) {
-            if (speakerPlayIsPlaying()) {
-                // Stop TTS playback
-                speakerPlayStop();
-                speakerPlayRelease();
-                // Send tts_stop to PC
-                bridgeSerial.println("{\"type\":\"tts_stop\"}");
-                // Consume the button press front
-                ttsButtonConsumed[i] = true;
+    // TTS : tout bouton coupe la lecture (P3), front consommé pour ne pas
+    // déclencher l'action normale. ⚠️ wasPressed() est DESTRUCTIF : ne
+    // l'appeler QUE pendant une lecture — la v1 le faisait à chaque frame et
+    // mangeait tous les fronts du firmware (menu, approbations… gelés).
+    if (speakerPlayIsPlaying()) {
+        bool anyPress = false;
+        for (int i = 0; i < 3; i++) {
+            if (buttonManager.wasPressed(static_cast<AppButton>(i))) {
+                anyPress = true;
             }
-        } else if (!buttonManager.wasPressed(btn)) {
-            // Reset consumed flag when button is released
-            ttsButtonConsumed[i] = false;
+        }
+        if (anyPress) {
+            speakerPlayStop();
+            speakerPlayRelease();
+            bridgeSerial.println("{\"type\":\"tts_stop\"}");
         }
     }
 
