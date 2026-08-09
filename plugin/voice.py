@@ -248,16 +248,30 @@ def resample_ulaw(ulaw_bytes, actual_rate, target_rate=SAMPLE_RATE):
     if n_out < 2:
         return ulaw_bytes
     out = bytearray(n_out)
-    ratio = (len(pcm) - 1) / (n_out - 1)
-    # ré-encode en µ-law via la fonction inverse (recherche par table inverse
-    # simple : on repasse par PCM16 -> WAV se fait ailleurs, ici on garde µ-law)
-    for i in range(n_out):
-        pos = i * ratio
-        i0 = int(pos)
-        frac = pos - i0
-        i1 = min(i0 + 1, len(pcm) - 1)
-        sample = int(pcm[i0] * (1 - frac) + pcm[i1] * frac)
-        out[i] = _pcm16_to_ulaw(sample)
+    ratio = len(pcm) / n_out
+    if ratio >= 1.5:
+        # Décimation par moyenne de fenêtre (boxcar) : filtre anti-repliement
+        # indispensable — une interpolation point-à-point replie tout le
+        # contenu au-dessus de 8 kHz dans la bande vocale (voix « métallique »
+        # que Voxtral transcrivait en langues aléatoires).
+        for i in range(n_out):
+            a = int(i * ratio)
+            b = int((i + 1) * ratio)
+            if b <= a:
+                b = a + 1
+            if b > len(pcm):
+                b = len(pcm)
+            seg = pcm[a:b]
+            out[i] = _pcm16_to_ulaw(int(sum(seg) / len(seg)))
+    else:
+        # Faible écart : interpolation linéaire suffisante.
+        step = (len(pcm) - 1) / (n_out - 1)
+        for i in range(n_out):
+            pos = i * step
+            i0 = int(pos)
+            frac = pos - i0
+            i1 = min(i0 + 1, len(pcm) - 1)
+            out[i] = _pcm16_to_ulaw(int(pcm[i0] * (1 - frac) + pcm[i1] * frac))
     return bytes(out)
 
 

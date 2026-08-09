@@ -23,8 +23,9 @@
 static const i2s_port_t MIC_I2S_PORT = I2S_NUM_0;
 static const adc1_channel_t MIC_ADC_CHANNEL = ADC1_CHANNEL_6;
 
-// Gain numérique (décalage) appliqué avant µ-law : le MEMS M5GO sort faible.
-static const int MIC_GAIN_SHIFT = 2;  // x4
+// Gain numérique (décalage) appliqué avant µ-law. x4 saturait (pics à 32124) ;
+// µ-law encaisse bien la dynamique, mieux vaut sous-amplifier qu'écrêter.
+static const int MIC_GAIN_SHIFT = 1;  // x2
 
 static uint8_t* s_buffer = nullptr;
 static size_t s_size = 0;
