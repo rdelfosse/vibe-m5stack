@@ -580,7 +580,10 @@ void loop() {
     if (!voutStateAnnounced || configManager.get().voiceOutMode != lastAnnouncedVout) {
         lastAnnouncedVout = configManager.get().voiceOutMode;
         voutStateAnnounced = true;
-        bridgeSerial.printf("{\"type\":\"config\",\"vout\":%d}\n", static_cast<int>(lastAnnouncedVout));
+        // En CHAÎNE (« off/device/pc ») : le bridge PC matche des strings.
+        const char* voutStr = (lastAnnouncedVout == VoiceOutMode::DEVICE) ? "device"
+                            : (lastAnnouncedVout == VoiceOutMode::PC) ? "pc" : "off";
+        bridgeSerial.printf("{\"type\":\"config\",\"vout\":\"%s\"}\n", voutStr);
     }
 
     // Handle serial communication
@@ -732,10 +735,10 @@ void loop() {
             }
             led::welcome();
             if (::millis() - lastPingTime > 5000) {
-                // vout : 0=off, 1=device, 2=pc
-                int voutValue = static_cast<int>(configManager.get().voiceOutMode);
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":%d}\n",
-                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, voutValue);
+                const char* pingVout = (configManager.get().voiceOutMode == VoiceOutMode::DEVICE) ? "device"
+                                     : (configManager.get().voiceOutMode == VoiceOutMode::PC) ? "pc" : "off";
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":\"%s\"}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, pingVout);
                 lastPingTime = ::millis();
             }
             // Mode démo : bascule auto après 10 s en welcome sans session PC.
@@ -755,10 +758,10 @@ void loop() {
             drawCatBanner(now, justEntered);
             led::idle();
             if (::millis() - lastPingTime > 5000) {
-                // vout : 0=off, 1=device, 2=pc
-                int voutValue = static_cast<int>(configManager.get().voiceOutMode);
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":%d}\n",
-                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, voutValue);
+                const char* pingVout = (configManager.get().voiceOutMode == VoiceOutMode::DEVICE) ? "device"
+                                     : (configManager.get().voiceOutMode == VoiceOutMode::PC) ? "pc" : "off";
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":\"%s\"}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, pingVout);
                 lastPingTime = ::millis();
             }
             break;

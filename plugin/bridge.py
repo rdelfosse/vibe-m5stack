@@ -322,8 +322,13 @@ class M5StackBridge:
             logger.warning(f"Could not apply debug flag: {e}")
     
     def _apply_vout_mode(self, value):
-        """Update voice out mode from device announcement."""
+        """Update voice out mode from device announcement.
+
+        Tolère les deux formats (vieux firmwares annonçaient un int).
+        """
         try:
+            if isinstance(value, int):
+                value = {0: "off", 1: "device", 2: "pc"}.get(value)
             if value in ("off", "device", "pc"):
                 self.voice_out_mode = value
                 logger.info(f"Voice Out mode (device): {value}")

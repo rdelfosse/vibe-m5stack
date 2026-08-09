@@ -578,11 +578,10 @@ async def _speak_at_turn_end():
     try:
         from plugin.tts_handler import speak_text, get_voice_out_mode, VoiceOutMode
         
-        # Check if Voice Out is enabled
-        mode = get_voice_out_mode()
-        if mode == VoiceOutMode.OFF:
-            return
-        
+        # NE PAS pré-filtrer avec la config locale (défaut Off) : le mode
+        # vient du MENU DU DEVICE (bridge.voice_out_mode) et c'est speak_text
+        # qui le consulte — l'ancien pré-check court-circuitait tout.
+
         # Get broker manager for device streaming
         mgr = get_or_init_broker()
         
