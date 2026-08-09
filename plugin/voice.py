@@ -7,7 +7,9 @@ import threading
 import wave
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+# Enfant du logger du hook -> écrit dans ~/.vibe/logs/m5stack_hook.log
+# (sinon les erreurs de capture/transcription partent dans le vide).
+logger = logging.getLogger("m5stack_hook.voice_input")
 VOXTRAL_MODEL = "voxtral-mini-latest"
 SAMPLE_RATE = 16000
 CHANNELS = 1
