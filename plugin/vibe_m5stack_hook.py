@@ -103,6 +103,10 @@ _tui_instance = None
 # fois côté device, donc un global suffit.
 _active_broker_request_id = None
 
+# TTS turn state
+_assistant_text_parts = []  # Accumulate AssistantEvent text during turn
+_tts_task = None  # Current TTS task (for cancellation)
+
 # Tool classification for thinking activity
 READING_TOOLS = {"read_file", "read", "grep", "search", "glob", "ls",
                  "list_dir", "web_fetch", "fetch", "web_search"}
@@ -552,18 +556,63 @@ def _patch_tui_capture():
     logger.info(f"TUI capture installée sur {app_cls.__name__}")
 
 
+async def _speak_at_turn_end():
+    """Speak accumulated assistant text at end of turn (TTS Voice Out).
+    
+    Handles:
+    - Concatenating accumulated AssistantEvent text
+    - Cleaning and truncating (P2)
+    - TTS synthesis and playback (PC or Device)
+    - Robustness: never blocks the turn, handles errors silently
+    """
+    global _assistant_text_parts, _tts_task
+    
+    # Concatenate accumulated text
+    full_text = "".join(_assistant_text_parts)
+    _assistant_text_parts = []  # Reset for next turn
+    
+    if not full_text:
+        # No text to speak (e.g., tool calls only)
+        return
+    
+    try:
+        from plugin.tts_handler import speak_text, get_voice_out_mode, VoiceOutMode
+        
+        # Check if Voice Out is enabled
+        mode = get_voice_out_mode()
+        if mode == VoiceOutMode.OFF:
+            return
+        
+        # Get broker manager for device streaming
+        mgr = get_or_init_broker()
+        
+        # Launch TTS in background task (never block the turn)
+        _tts_task = asyncio.create_task(
+            speak_text(full_text, broker_mgr=mgr, vibe_config=_agent_loop.config if _agent_loop else None)
+        )
+        
+    except Exception as e:
+        # Never break the turn on TTS errors
+        logger.warning(f"TTS at turn end failed (non-critical): {e}")
+
+
 def patch_act_for_status():
     """Patch AgentLoop.act to observe events and push status."""
     from vibe.core.agent_loop import AgentLoop
+    from vibe.core.types import AssistantEvent
     
     _orig_act = AgentLoop.act
     
     async def patched_act(self, msg, *args, **kwargs):
         """Wrapped act that observes events and pushes status."""
         global _status_seq, _last_status_activity, _agent_loop, _asyncio_loop
+        global _assistant_text_parts, _tts_task
         # Store agent loop and event loop for voice handler callbacks
         _agent_loop = self
         _asyncio_loop = asyncio.get_running_loop()
+        
+        # Reset TTS state for new turn
+        _assistant_text_parts = []
 
         
         # Push thinking state at start of turn
@@ -573,6 +622,10 @@ def patch_act_for_status():
         
         try:
             async for ev in _orig_act(self, msg, *args, **kwargs):
+                # Accumulate AssistantEvent text for TTS (P2)
+                if isinstance(ev, AssistantEvent):
+                    _assistant_text_parts.append(ev.data.text if hasattr(ev.data, 'text') else str(ev.data))
+                
                 # Handle approval requests - race M5Stack against TUI
                 if type(ev).__name__ == "ApprovalRequestEvent":
                     # Observer, ne PAS consommer : on re-yield l'event pour la TUI,
@@ -585,6 +638,10 @@ def patch_act_for_status():
             
             # Push done state at end of turn
             push_status_to_device("done", "", _status_seq + 1)
+            
+            # Speak accumulated assistant text (TTS Voice Out - P2)
+            await _speak_at_turn_end()
+            
         except Exception as e:
             push_status_to_device("error", str(e)[:40], _status_seq + 1)
             raise
