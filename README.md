@@ -16,11 +16,14 @@ limitations under the License.
 -->
 # vibe-m5stack
 
-Approbation physique pour [Mistral Vibe CLI](https://mistral.ai/) via un M5Stack Fire.
-Quand l'agent veut faire quelque chose de sensible (commit, push, écriture fichier
-critique), un écran s'allume sur le M5Stack avec un chat Mistral qui danse et tu
-valides au bouton. LEDs latérales + matrices NeoPixel optionnelles aux ports B/C
-pour signaler l'attente.
+Télécommande physique **et vocale** pour [Mistral Vibe CLI](https://mistral.ai/)
+via un M5Stack Fire. Quand l'agent veut faire quelque chose de sensible (commit,
+push, écriture fichier critique), un écran s'allume sur le M5Stack avec un chat
+Mistral qui danse et tu valides au bouton — **ou à la voix** : maintiens un
+bouton, parle au device (micro embarqué), Voxtral transcrit. Ton instruction
+démarre un tour dans Vibe, ton commentaire pilote la todo en cours, ta consigne
+motive un refus. LEDs latérales + matrices NeoPixel optionnelles aux ports B/C
+pour signaler l'attente. Et sans PC, un mode démo transforme le device en vitrine.
 
 > 📝 **Article complet** : [Un bouton physique pour valider les actions des agents IA](https://www.romaindelfosse.fr/blog/m5stack-vibe-bouton-physique-agents-ia/) — contexte, démo et retour d'expérience.
 
@@ -35,13 +38,14 @@ pour signaler l'attente.
 </p>
 
 ```
-PC (vibe-m5stack)  ──hook Python──>  plugin/vibe_m5stack_hook.py
-                                          │
-                                     USB Serial 115200
-                                          ▼
-                                  M5Stack Fire (firmware/)
-                                     écran + boutons A/B/C
-                                     + ring LED + (optionnel) NeoMatrix
+PC (vibe-m5stack) ── hook Python ──> plugin/  (approbations, statuts, voix -> Voxtral)
+                                        │
+                            Bluetooth SPP  (ou USB Serial)
+          statuts, approbations, acks  ▼   ▲  réponses boutons + audio µ-law
+                                        │  │  streamé pendant la dictée
+                                 M5Stack Fire (firmware/)
+                          écran + boutons A/B/C + micro (socle M5GO)
+                          + ring LED + (optionnel) NeoMatrix
 ```
 
 ---
@@ -84,6 +88,70 @@ vibe-m5stack doctor
 Vérifie que tout est correctement configuré (pyserial, port, firmware, entrypoints).
 
 ---
+
+## 🎙️ Parler à l'agent (v0.5.0)
+
+<!-- MEDIA À CAPTURER : docs/images/voice-prompt.gif — GIF ~15 s : appui long A,
+     écran « Listening... », dictée, « Transcribing... », le texte apparaît dans
+     la TUI Vibe et l'agent démarre. Cadrer device + écran PC ensemble. -->
+<p align="center">
+  <img src="docs/images/voice-prompt.gif" width="70%" alt="Dictée d'une instruction au M5Stack : Listening, Transcribing, le texte apparaît dans Vibe et lance un tour">
+</p>
+
+Le micro est **dans le device** (MEMS du socle M5GO) : tu dictes depuis le canapé.
+L'audio est compressé (G.711 µ-law 16 kHz) et **streamé pendant que tu parles**
+sur le lien Bluetooth — au relâchement, la transcription Voxtral part
+immédiatement. Jusqu'à 60 s de dictée.
+
+| Geste | Contexte | Effet |
+|---|---|---|
+| **A** maintenu (~0,5 s) + parler | Ready / welcome | L'instruction dictée apparaît dans Vibe comme un message et démarre un tour |
+| **A** maintenu + parler | Approbation | Approuve immédiatement ; le commentaire dicté est injecté dans le tour **en cours** |
+| **B** maintenu + parler | Approbation | Rejette avec ta consigne dictée comme raison du refus |
+| **A** / **B** / **C** court | Approbation | Approve / Reject / Cancel (inchangé) |
+
+La clé API Mistral est résolue comme Vibe la résout (variable `MISTRAL_API_KEY`
+ou keyring du login navigateur) — rien à configurer en plus. Pas de micro sur le
+device ? Bascule `Mic : PC` dans le menu de configuration.
+
+## 🎛️ Menu de configuration
+
+<!-- MEDIA À CAPTURER : docs/images/config-menu.jpg — photo nette de l'écran
+     menu, les 7 items visibles (mettre Demo Mode ON pour l'exemple). -->
+<p align="center">
+  <img src="docs/images/config-menu.jpg" width="60%" alt="Menu de configuration du device : Quiet Mode, LED Brightness, Model, Demo Mode, Debug, Mic, Exit">
+</p>
+
+Appui long **C** (~1 s) depuis l'écran Ready. Navigation **C** (suivant) /
+**B** (précédent), sélection **A**, sortie via « Exit » ou C long. Tous les
+réglages sont persistés (NVS) :
+
+| Item | Effet |
+|---|---|
+| **Quiet Mode** | Coupe vibrations et bips |
+| **LED Brightness** | 16 / 32 / 64 / 128 / 255, appliqué en direct |
+| **Model** | Chat Mistral animé… ou **Chaton Fat** 😼, « le nouveau modèle Mistral » |
+| **Demo Mode** | Vitrine autonome au boot sans PC (section suivante) |
+| **Debug** | Audit des flux voix côté PC (dump `last_ptt.wav` + logs) — OFF par défaut |
+| **Mic** | Source du push-to-talk : **Device** (défaut) ou PC |
+
+## 🎬 Mode démo
+
+<!-- MEDIA À CAPTURER : docs/images/demo-mode.gif — GIF ~20 s : 2-3 phases du
+     cycle avec le bandeau légendé qui change (Thinking cyan -> Waiting jaune ->
+     Ready vert) et les animations LED assorties. -->
+<p align="center">
+  <img src="docs/images/demo-mode.gif" width="70%" alt="Mode démo : le chat danse pendant que les animations LED défilent, chaque état légendé à l'écran dans sa couleur">
+</p>
+
+`Demo Mode : ON` au menu, pas de session PC : 10 secondes après l'écran
+d'accueil, le device enchaîne **les 7 animations LED** (welcome, les 4 activités
+de thinking, waiting, done), chaque état légendé à l'écran dans sa couleur, chat
+animé — ou Chaton Fat — en vedette. N'importe quel bouton pour sortir. Parfait
+pour un salon, un stand, ou montrer l'objet sans ouvrir un terminal.
+
+*(Anecdote : cette feature a été spécifiée à la voix, depuis le canapé, via le
+device lui-même — dictée à l'agent, approuvée aux boutons, reviewée, flashée.)*
 
 ## 📖 Documentation complète
 
@@ -593,14 +661,25 @@ PC → M5Stack (1 ligne JSON terminée `\n`) :
 {"type":"approval","id":12345,"title":"Commit","body":"..."}
 {"type":"credit_info","percent":45}
 {"type":"status","state":"thinking","detail":"edit foo.py","seq":42}
+{"type":"voice_ack","state":"transcribing"}
+{"type":"voice_ack","state":"done","text":"extrait de la transcription"}
 ```
 
 M5Stack → PC :
 ```json
 {"type":"response","id":12345,"approved":true}
 {"type":"response","id":12345,"approved":false,"cancelled":true}
-{"type":"ping"}    // toutes les 5s en IDLE
+{"type":"ping","fw":"0.5.0","debug":0}    // toutes les 5s en welcome/idle
+{"type":"voice","action":"start","mode":"prompt","id":0,"session":3,"mic":"device"}
+{"type":"audio","seq":12,"data":"<chunk µ-law en base64>"}   // streamé pendant la dictée
+{"type":"audio_end","seq":42,"total":43008,"ms":2841}        // ms = durée réelle mesurée
+{"type":"config","debug":1}    // au boot et à chaque toggle Debug au menu
 ```
+
+**Messages voix** : `mode` ∈ `prompt` (instruction) / `approve` (commentaire) /
+`reject` (consigne de refus) ; `mic` ∈ `device` (audio streamé ensuite) / `pc`
+(le plugin enregistre avec sounddevice). Le PC recale l'audio sur 16 kHz grâce à
+`ms` (le débit réel de l'ADC ESP32 dérive) puis transcrit via Voxtral.
 
 **Nouveau message `status`** (feature A+B) :
 - `state` : "thinking" | "waiting" | "done" | "error"
