@@ -9,6 +9,18 @@ En pré-1.0, la version *minor* (0.X.0) est incrémentée pour les nouvelles fon
 et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
+
+## [0.5.1] - 2026-08-09
+
+### Changé
+- **Migration API approbation Mistral Vibe ≥ 2.23** : suppression de `AgentLoop.set_approval_callback` (remplacé par `InteractionRequestBroker`).
+- **Pin levé** : dépendance `mistral-vibe` mise à jour de `>=2.11,<2.23` à `>=2.23`.
+- **Code legacy supprimé** : `patch_agent_loop()`, `_original_set_approval_callback`, wrapper modal/TUI, hack `_pending_approval`.
+
+### Corrigé
+- Course native TUI vs M5Stack pour les approbations (plus de fouillage des internals Textual).
+- Timeout device ne résout plus l'approbation en refus automatique (décision laissée à la TUI).
+
 ## [0.5.0] - 2026-08-09
 
 ### Ajouté

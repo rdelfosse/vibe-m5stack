@@ -22,9 +22,7 @@ dynamic = ["version"]
 description = "Physical approval device (M5Stack Fire) for Mistral Vibe CLI"
 requires-python = ">=3.12"
 dependencies = [
-    # <2.23 : la 2.23 remplace AgentLoop.set_approval_callback par un
-    # InteractionRequestBroker (événements) — le hook n'est pas encore adapté.
-    "mistral-vibe>=2.11,<2.23",
+    "mistral-vibe>=2.23",
     "pyserial>=3.5",
     "sounddevice>=0.4.6",
     "mcp>=1.0.0",
