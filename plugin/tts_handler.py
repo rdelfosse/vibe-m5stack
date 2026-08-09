@@ -486,10 +486,23 @@ async def stream_to_device(audio_data: bytes, broker_mgr) -> bool:
     try:
         # Convert to µ-law 16kHz mono
         ulaw_data = wav_to_ulaw_16k(audio_data)
-        
+
         if not ulaw_data:
             logger.warning("Empty audio data after conversion")
             return False
+
+        # Debug : dernière synthèse décodée sur disque (audit qualité, comme
+        # last_ptt.wav pour le micro). Jamais persisté hors debug explicite.
+        from plugin import runtime_flags
+        if runtime_flags.debug_enabled():
+            try:
+                from pathlib import Path
+                from plugin.voice import ulaw_to_wav
+                dump = Path.home() / ".vibe" / "logs" / "last_tts.wav"
+                dump.write_bytes(ulaw_to_wav(ulaw_data))
+                logger.info(f"[debug] TTS audio: {len(ulaw_data)} octets µ-law -> {dump}")
+            except Exception:
+                logger.exception("Could not dump last_tts.wav")
         
         # Send tts_stop first to cancel any previous playback
         try:

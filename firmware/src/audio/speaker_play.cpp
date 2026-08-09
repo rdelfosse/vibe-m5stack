@@ -50,15 +50,17 @@ static int16_t ulaw2linear(uint8_t ulaw) {
     uint8_t sign = ulaw & 0x80;
     uint8_t exponent = (ulaw >> 4) & 0x07;
     uint8_t mantissa = ulaw & 0x0F;
-    
-    int16_t sample = (((mantissa << 3) + BIAS) << (exponent + 3)) - BIAS;
+
+    // Formule EXACTEMENT inverse de l'encodeur PC (plugin/voice.py) :
+    // << exponent, PAS << (exponent+3) — l'ancienne version sortait des
+    // valeurs 8x trop grandes qui débordaient l'int16 (bruit pur).
+    int32_t sample = (((int32_t)(mantissa << 3) + BIAS) << exponent) - BIAS;
     if (sign) sample = -sample;
-    
-    // Clamping (ne devrait pas arriver avec des données valides)
+
     if (sample > CLIP) sample = CLIP;
     if (sample < -CLIP) sample = -CLIP;
-    
-    return sample;
+
+    return (int16_t)sample;
 }
 
 // Tâche de lecture I2S : lit du buffer circulaire et envoie à I2S DAC.
@@ -153,6 +155,9 @@ bool speakerPlayStart() {
         return false;
     }
     
+    // OBLIGATOIRE en mode DAC intégré : route la sortie I2S vers les broches
+    // DAC (sans cet appel, rien ne sort — juste un grésillement résiduel).
+    i2s_set_pin(SPEAKER_I2S_PORT, nullptr);
     // HP du Fire sur GPIO 25 = DAC canal 1 = slot DROIT de l'I2S.
     // (i2s_set_dac_mode attend un i2s_dac_mode_t, pas un i2s_mode_t.)
     i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
