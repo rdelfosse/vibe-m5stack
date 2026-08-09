@@ -69,25 +69,33 @@ class VoiceInput:
                 self._audio_data += audio_bytes
 
     def record_stop(self):
+        # Étape 1 : sous verrou, basculer l'état et confisquer stream + audio.
+        # NE PAS appeler stream.stop() ni _cleanup_recording() sous le verrou :
+        # stop() attend la fin des callbacks audio (qui prennent ce même verrou)
+        # et _cleanup_recording() le reprend — deadlock dans les deux cas.
         with self._lock:
             if not self._recording:
                 return None
             self._recording = False
+            stream = self._stream
+            self._stream = None
+            audio_data = self._audio_data
+            self._audio_data = None
+        # Étape 2 : hors verrou, arrêter le flux (les callbacks restants
+        # no-opent car _recording est déjà False).
+        if stream is not None:
             try:
-                if self._stream:
-                    self._stream.stop()
-                    self._stream.close()
-                    self._stream = None
-                if not self._audio_data:
-                    self._cleanup_recording()
-                    return None
-                wav_data = self._encode_to_wav(self._audio_data)
-                self._cleanup_recording()
-                return wav_data
+                stream.stop()
+                stream.close()
             except Exception as e:
                 logger.error(f"Error stopping recording: {e}")
-                self._cleanup_recording()
-                return None
+        if not audio_data:
+            return None
+        try:
+            return self._encode_to_wav(audio_data)
+        except Exception as e:
+            logger.error(f"Error encoding wav: {e}")
+            return None
 
     def _encode_to_wav(self, audio_data):
         wav_buffer = io.BytesIO()
@@ -99,17 +107,20 @@ class VoiceInput:
         return wav_buffer.getvalue()
 
     def _cleanup_recording(self):
+        # Même discipline que record_stop : confisquer sous verrou,
+        # stopper le flux HORS verrou (callbacks audio -> self._lock).
         with self._lock:
             self._recording = False
             self._audio_data = None
-            if self._stream:
-                try:
-                    if self._stream.active:
-                        self._stream.stop()
-                    self._stream.close()
-                except Exception:
-                    pass
-                self._stream = None
+            stream = self._stream
+            self._stream = None
+        if stream is not None:
+            try:
+                if stream.active:
+                    stream.stop()
+                stream.close()
+            except Exception:
+                pass
 
     async def transcribe(self, wav_data):
         if not self._has_mistralai or not self._has_api_key:
@@ -139,8 +150,8 @@ class VoiceInput:
         return loop.run_until_complete(self.transcribe(wav_data))
 
     def cancel(self):
-        with self._lock:
-            self._cleanup_recording()
+        # _cleanup_recording gère lui-même le verrou (le prendre ici = deadlock).
+        self._cleanup_recording()
 
 _voice_input = None
 
