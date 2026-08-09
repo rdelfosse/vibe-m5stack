@@ -256,7 +256,10 @@ void loop() {
     }
 
     // Voice block: root level, after menu block
+    // DONE est l'état « Ready » d'une session vivante (IDLE est quasi
+    // inatteignable après le premier STATUS) : il doit être éligible à la voix.
     bool inVoiceEligibleState = (currentState == AppState::IDLE ||
+                                  currentState == AppState::DONE ||
                                   currentState == AppState::WELCOME ||
                                   currentState == AppState::SHOWING_REQUEST ||
                                   currentState == AppState::LISTENING);
@@ -264,6 +267,7 @@ void loop() {
     if (inVoiceEligibleState) {
         // Button A tracking for long-press
         bool aEligible = (currentState == AppState::IDLE ||
+                         currentState == AppState::DONE ||
                          currentState == AppState::WELCOME ||
                          currentState == AppState::SHOWING_REQUEST);
         // Une fois en LISTENING (long-press A parti), le bouton porteur doit
@@ -279,7 +283,8 @@ void loop() {
                 buttonALongFired = false;
             } else if (!buttonALongFired && now - buttonAHoldStart >= LONGPRESS_MS) {
                 buttonALongFired = true;
-                if (currentState == AppState::IDLE || currentState == AppState::WELCOME) {
+                if (currentState == AppState::IDLE || currentState == AppState::DONE ||
+                    currentState == AppState::WELCOME) {
                     voiceMode = VoiceMode::PROMPT;
                     voiceRequestId = 0;
                     prevState = currentState;
