@@ -29,6 +29,9 @@ class FakeVoiceInput:
     def is_available(self):
         return self.available
 
+    def availability_detail(self):
+        return f"fake available={self.available}"
+
     def transcribe_sync(self, wav_data):
         if isinstance(self.text, Exception):
             raise self.text

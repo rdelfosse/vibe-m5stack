@@ -108,7 +108,9 @@ class VoiceHandler:
         self._send_ack("transcribing", "")
 
         if not self._voice_input.is_available():
-            logger.error("Voice input not available (mic / mistralai / API key)")
+            logger.error(
+                "Voice input not available: " + self._voice_input.availability_detail()
+            )
             self._send_ack("done", "")
             self._resolve_reject_fallback(
                 mode, request_id, DEFAULT_REJECT_REASON + " (voice unavailable)"

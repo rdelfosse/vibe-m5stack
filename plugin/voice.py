@@ -32,11 +32,34 @@ class VoiceInput:
             self._has_mistralai = True
         except ImportError:
             pass
-        if "MISTRAL_API_KEY" in os.environ and os.environ["MISTRAL_API_KEY"]:
-            self._has_api_key = True
+        self._has_api_key = bool(self._get_api_key())
+
+    def _get_api_key(self):
+        """Résout la clé comme Vibe lui-même : env puis keyring OS.
+
+        Une clé posée par `vibe` (login navigateur -> keyring) fonctionne donc
+        sans variable d'environnement. Résolution paresseuse : la clé peut
+        apparaître après le premier import.
+        """
+        try:
+            from vibe.core.config.vibe_schema import resolve_api_key
+            key = resolve_api_key("MISTRAL_API_KEY")
+            if key:
+                return key
+        except Exception as e:
+            logger.debug(f"resolve_api_key failed: {e}")
+        return os.environ.get("MISTRAL_API_KEY") or None
 
     def is_available(self):
+        # Ré-évaluer la clé à chaque fois (login possible en cours de session).
+        self._has_api_key = bool(self._get_api_key())
         return self._has_sounddevice and self._has_mistralai and self._has_api_key
+
+    def availability_detail(self):
+        """Pour les logs : dit précisément ce qui manque."""
+        return (f"sounddevice={self._has_sounddevice} "
+                f"mistralai={self._has_mistralai} "
+                f"api_key={'oui' if self._get_api_key() else 'NON'}")
 
     def record_start(self):
         if not self._has_sounddevice:
@@ -123,11 +146,11 @@ class VoiceInput:
                 pass
 
     async def transcribe(self, wav_data):
-        if not self._has_mistralai or not self._has_api_key:
+        if not self._has_mistralai:
             return ""
         try:
             import mistralai
-            api_key = os.environ.get("MISTRAL_API_KEY", "")
+            api_key = self._get_api_key()
             if not api_key:
                 return ""
             client = mistralai.Mistral(api_key=api_key)
