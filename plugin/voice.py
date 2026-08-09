@@ -46,7 +46,9 @@ class VoiceInput:
                 return False
             try:
                 import sounddevice as sd
-                self._stream = sd.InputStream(
+                # RawInputStream livre des buffers bruts (int16 little-endian),
+                # sans dépendre de numpy (requis par InputStream).
+                self._stream = sd.RawInputStream(
                     samplerate=SAMPLE_RATE, channels=CHANNELS, dtype='int16',
                     callback=self._audio_callback
                 )
@@ -59,7 +61,7 @@ class VoiceInput:
                 return False
 
     def _audio_callback(self, indata, frames, time, status):
-        audio_bytes = indata.tobytes()
+        audio_bytes = bytes(indata)
         with self._lock:
             if self._recording:
                 if self._audio_data is None:
