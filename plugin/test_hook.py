@@ -57,7 +57,7 @@ async def test_approval_event_triggers_device_race():
     import plugin.vibe_m5stack_hook as hook_module
     
     mock_agent_loop = MagicMock(spec=AgentLoop)
-    mock_agent_loop.resolve_approval_request = AsyncMock()
+    mock_agent_loop.resolve_approval_request = MagicMock()  # SYNCHRONE dans l'API réelle
     
     event = MockApprovalRequestEvent(
         tool_name="write_file",
@@ -90,7 +90,7 @@ async def test_device_timeout_no_resolution():
     import plugin.vibe_m5stack_hook as hook_module
     
     mock_agent_loop = MagicMock(spec=AgentLoop)
-    mock_agent_loop.resolve_approval_request = AsyncMock()
+    mock_agent_loop.resolve_approval_request = MagicMock()  # SYNCHRONE dans l'API réelle
     
     event = MockApprovalRequestEvent(
         tool_name="write_file",
@@ -119,7 +119,7 @@ async def test_exception_in_race_no_crash():
     import plugin.vibe_m5stack_hook as hook_module
     
     mock_agent_loop = MagicMock(spec=AgentLoop)
-    mock_agent_loop.resolve_approval_request = AsyncMock()
+    mock_agent_loop.resolve_approval_request = MagicMock()  # SYNCHRONE dans l'API réelle
     
     event = MockApprovalRequestEvent(
         tool_name="write_file",
@@ -140,7 +140,7 @@ async def test_device_reject_resolves():
     import plugin.vibe_m5stack_hook as hook_module
     
     mock_agent_loop = MagicMock(spec=AgentLoop)
-    mock_agent_loop.resolve_approval_request = AsyncMock()
+    mock_agent_loop.resolve_approval_request = MagicMock()  # SYNCHRONE dans l'API réelle
     
     event = MockApprovalRequestEvent(
         tool_name="write_file",

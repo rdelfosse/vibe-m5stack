@@ -57,6 +57,16 @@ if str(_PLUGIN_DIR) not in sys.path:
 
 from plugin.bridge import M5StackBridge
 from plugin.m5stack_utils import SessionManager
+# Fail-fast AVANT tout import spécifique >=2.23 (ApprovalRequestEvent
+# n'existe pas en 2.22 : l'importer d'abord donnerait un ImportError cryptique
+# au lieu de ce message actionnable).
+from vibe.core.agent_loop import AgentLoop
+if hasattr(AgentLoop, "set_approval_callback"):  # API < 2.23
+    raise RuntimeError(
+        "vibe-m5stack >= 0.5.1 requiert mistral-vibe >= 2.23 "
+        "(détecté : ancienne API d'approbation). Mets à jour : uv tool upgrade mistral-vibe"
+    )
+
 from vibe.core.types import ApprovalResponse
 from vibe.core.tools.permissions import RequiredPermission
 
@@ -75,14 +85,6 @@ from vibe.core.types import (
     ApprovalRequestEvent,
 )
 
-# Fail-fast check for old API
-from vibe.core.agent_loop import AgentLoop
-if hasattr(AgentLoop, "set_approval_callback"):
-    raise RuntimeError(
-        "vibe-m5stack >= 0.5.1 requiert mistral-vibe >= 2.23 "
-        "(détecté : ancienne API d'approbation). Mets à jour : uv tool upgrade mistral-vibe"
-    )
-
 # Global state tracking for status
 _status_seq = 0
 _last_status_state = "done"
@@ -91,10 +93,15 @@ _last_status_activity = ""
 # Global references for voice handler callbacks
 _agent_loop = None
 _asyncio_loop = None
-# Instance TextualUI, capturée quand la TUI enregistre son approval callback
-# (au démarrage de session) : sert à soumettre les prompts vocaux comme de
-# vrais messages utilisateur.
+# Instance de la TUI (VibeApp en >=2.23, TextualUI avant), capturée à sa
+# construction via _patch_tui_capture() : sert à soumettre les prompts vocaux
+# comme de vrais messages utilisateur.
 _tui_instance = None
+# request_id (uuid) de l'approbation broker en cours : posé par la course
+# _race_m5stack_approval, consommé par le reject vocal. L'id série (int) du
+# protocole device ne peut PAS transporter l'uuid — une seule approbation à la
+# fois côté device, donc un global suffit.
+_active_broker_request_id = None
 
 # Tool classification for thinking activity
 READING_TOOLS = {"read_file", "read", "grep", "search", "glob", "ls",
@@ -388,25 +395,21 @@ async def m5stack_approval_callback(
 
     # Preferred path: route through the owner-broker so status + approval share
     # the single persistent connection (and multi-session works).
-    # Convert request_id to int for broker/bridge compatibility
-    req_id_int = None
-    if request_id is not None:
-        try:
-            req_id_int = int(request_id)
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid request_id format: {request_id}, using None")
-    
+    # NB : request_id est l'uuid du broker Vibe — il ne passe PAS sur le
+    # protocole série (ids int). Le matching série garde ses ids générés ;
+    # la résolution Vibe utilise l'uuid via _active_broker_request_id.
+
     mgr = get_or_init_broker()
     if _broker_can_approve(mgr):
         try:
             if mgr.is_owner():
                 # broker.request_approval is blocking (serial) -> off the event loop
                 response = await asyncio.to_thread(
-                    mgr.broker.request_approval, title, body, req_id_int
+                    mgr.broker.request_approval, title, body, None
                 )
             else:
                 # Use the provided request_id instead of generating a new one
-                actual_req_id = req_id_int if req_id_int is not None else int(asyncio.get_event_loop().time() * 1000) % 1_000_000
+                actual_req_id = int(asyncio.get_event_loop().time() * 1000) % 1_000_000
                 response = await mgr.client.request_approval(title, body, actual_req_id)
         except Exception as e:
             logger.error(f"Broker approval error: {e}")
@@ -427,7 +430,9 @@ async def m5stack_approval_callback(
                 return None
         if not _bridge.is_connected():
             return None
-        response = await _bridge.request_approval(title, body, req_id_int)
+        # NB : la signature du wrapper est (title, body, timeout) — surtout ne
+        # pas passer un id en 3e position (il partirait en timeout).
+        response = await _bridge.request_approval(title, body)
 
     if response is None:
         logger.warning("M5Stack approval timeout or error - no resolution from device")
@@ -454,8 +459,11 @@ async def m5stack_approval_callback(
 
 async def _race_m5stack_approval(agent_loop, ev):
     """Demande au device ; s'il répond avant la TUI, résout via l'API publique."""
+    global _active_broker_request_id
+    # Publie l'uuid broker de l'approbation en cours pour le reject vocal
+    # (l'id série int du device ne peut pas transporter l'uuid).
+    _active_broker_request_id = ev.request_id
     try:
-        # Pass request_id to the callback so it can be used in the response
         response_feedback = await m5stack_approval_callback(
             ev.tool_name, ev.tool_args, ev.tool_call_id, ev.required_permissions, ev.request_id
         )
@@ -463,8 +471,51 @@ async def _race_m5stack_approval(agent_loop, ev):
             response, feedback = response_feedback
             # Ignoré silencieusement par le broker si la TUI a déjà résolu.
             agent_loop.resolve_approval_request(ev.request_id, response, feedback)
+            # Best-effort : signaler à la TUI que le device a tranché (sa
+            # modal ne s'auto-ferme pas forcément sur une résolution externe).
+            tui = _tui_instance
+            if tui is not None:
+                try:
+                    # Même loop asyncio que la TUI : appel direct (PAS
+                    # call_from_thread, qui exige un thread différent).
+                    verdict = "approuve" if response == ApprovalResponse.YES else "refuse"
+                    tui.notify(f"{ev.tool_name} {verdict} via M5Stack",
+                               title="M5Stack", timeout=3)
+                except Exception:
+                    pass
     except Exception:
         logger.exception("M5Stack approval race failed")  # ne jamais casser le tour
+    finally:
+        _active_broker_request_id = None
+
+
+def _patch_tui_capture():
+    """Capture l'instance de la TUI à sa construction.
+
+    En >=2.23, AgentLoop.set_approval_callback n'existe plus (c'était notre
+    point de capture) : on patche __init__ de la classe d'app TUI (VibeApp,
+    ex-TextualUI). Sans capture, les prompts vocaux retomberaient sur
+    inject_user_context, qui ne démarre pas de tour.
+    """
+    try:
+        import vibe.cli.textual_ui.app as _appmod
+    except Exception as e:
+        logger.warning(f"Module TUI introuvable ({e}) - prompts vocaux en mode dégradé")
+        return
+    app_cls = getattr(_appmod, "VibeApp", None) or getattr(_appmod, "TextualUI", None)
+    if app_cls is None:
+        logger.warning("Classe d'app TUI introuvable - prompts vocaux en mode dégradé")
+        return
+
+    orig_init = app_cls.__init__
+
+    def captured_init(self, *args, **kwargs):
+        global _tui_instance
+        orig_init(self, *args, **kwargs)
+        _tui_instance = self
+
+    app_cls.__init__ = captured_init
+    logger.info(f"TUI capture installée sur {app_cls.__name__}")
 
 
 def patch_act_for_status():
@@ -519,8 +570,9 @@ def install_hook():
     Call this before starting Vibe CLI.
     """
     logger.info("Installing Vibe M5Stack approval hook...")
-    
+
     patch_act_for_status()
+    _patch_tui_capture()
 
     # Setup voice handler callbacks
     try:
@@ -571,25 +623,26 @@ def install_hook():
             """Résout l'approbation pendante depuis le thread de transcription.
 
             Utilisé par le reject vocal : approved est False, text = consigne.
-            Sans agent_loop disponible, on logge et on ne fait rien.
+            `request_id` est l'id SÉRIE (int) du device — la résolution Vibe
+            exige l'uuid broker, publié par la course dans
+            _active_broker_request_id. Sans approbation en cours, on ne
+            résout RIEN (jamais à l'aveugle).
             """
             loop = _asyncio_loop
             agent_loop = _agent_loop
-            if agent_loop is None or loop is None:
+            broker_rid = _active_broker_request_id
+            if agent_loop is None or loop is None or broker_rid is None:
                 logger.warning(
-                    f"Voice resolve dropped (no agent_loop): id={request_id}"
+                    f"Voice resolve dropped (no pending approval): serial_id={request_id}"
                 )
                 return
             response = ApprovalResponse.YES if approved else ApprovalResponse.NO
-            # resolve_approval_request est async - l'appeler via run_coroutine_threadsafe
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    agent_loop.resolve_approval_request(request_id, response, text),
-                    loop
-                )
-                logger.info(f"Voice approval resolved: id={request_id}, approved={approved}")
-            except Exception as e:
-                logger.error(f"Failed to resolve approval via voice: {e}")
+            # resolve_approval_request est SYNCHRONE (il complète une Future du
+            # broker) : call_soon_threadsafe depuis le thread de transcription.
+            loop.call_soon_threadsafe(
+                agent_loop.resolve_approval_request, broker_rid, response, text
+            )
+            logger.info(f"Voice approval resolved: broker_id={broker_rid}, approved={approved}")
         handler.set_resolve_approval_callback(resolve_approval_callback)
 
         def send_voice_ack_callback(state: str, text: str = ""):
