@@ -641,7 +641,7 @@ void loop() {
         return s == AppState::WELCOME || s == AppState::DEAD || s == AppState::STUCK
             || s == AppState::ERROR_STATE || s == AppState::SHOWING_REQUEST
             || s == AppState::CONFIG_MENU || s == AppState::LISTENING
-            || s == AppState::TRANSCRIBING;
+            || s == AppState::TRANSCRIBING || s == AppState::DEMO_MODE;
     };
     if (justEntered && isFullScreen(prevRendered) && !isFullScreen(currentState)) {
         animator.reset();
@@ -657,13 +657,17 @@ void loop() {
             if (::millis() - lastPingTime > 5000) {
                 bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
                                     FW_VERSION, configManager.get().debugMode ? 1 : 0);
-            // Auto-enter demo mode if enabled and no PC connection
-            static uint32_t welcomeEntryTime = now;
-            if (configManager.get().demoMode && now - welcomeEntryTime > 10000) {
-                currentState = AppState::DEMO_MODE;
-                forceRedraw = true;
-            }
                 lastPingTime = ::millis();
+            }
+            // Mode démo : bascule auto après 10 s en welcome sans session PC.
+            {
+                static uint32_t welcomeEntryTime = 0;
+                if (justEntered) welcomeEntryTime = now;
+                if (configManager.get().demoMode && now - welcomeEntryTime > 10000) {
+                    prevState = currentState;
+                    currentState = AppState::DEMO_MODE;
+                    forceRedraw = true;
+                }
             }
             break;
         }
@@ -744,39 +748,60 @@ void loop() {
         }
 
         case AppState::DEMO_MODE: {
+            // Vitrine autonome (sans PC) : chat animé (ou Chaton Fat) + cycle
+            // de toutes les animations LED. AUCUN redraw plein écran par frame
+            // (le fillRect à 60 fps de la v1 saturait le SPI, cf. garde-fou).
             static uint32_t demoStartTime = 0;
+            static uint32_t lastDemoDraw = 0;
+
+            bool redrew = false;
             if (justEntered) {
                 demoStartTime = now;
-                led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING);
-                forceRedraw = true;
+                animator.reset();   // fond rainbow plein écran
+                redrew = true;
             }
-            
-            // Run demo animations
-            led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING);  // false = update only (internal state manages the show)
-            
-            // Draw demo info on screen
-            M5.Lcd.fillRect(0, 0, 320, 240, BLACK);
-            M5.Lcd.setTextFont(2);
-            M5.Lcd.setTextSize(2);
-            M5.Lcd.setTextColor(0xFDE0, BLACK);
-            M5.Lcd.setCursor(40, 60);
-            M5.Lcd.print("DEMO MODE");
-            M5.Lcd.setTextSize(1);
-            M5.Lcd.setCursor(20, 120);
-            M5.Lcd.print("Mistral Vibe M5Stack");
-            M5.Lcd.setCursor(20, 160);
-            M5.Lcd.print("No PC connection needed");
-            
-            // Check for exit (long press C)
-            if (buttonManager.isHeld(AppButton::C) && !buttonCTracking) {
-                buttonCTracking = true;
-                buttonCHoldStart = now;
-            } else if (buttonCTracking && !buttonManager.isHeld(AppButton::C)) {
-                buttonCTracking = false;
-            } else if (buttonCTracking && now - buttonCHoldStart >= 1000) {
-                currentState = AppState::IDLE;
-                buttonCTracking = false;
-                led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING);
+
+            if (configManager.get().model == DeviceModel::CHATON_FAT) {
+                if (justEntered) {
+                    drawChatonFat(56, 34, 4, BLACK, WHITE);
+                }
+            } else if (justEntered || now - lastDemoDraw > 120) {
+                lastDemoDraw = now;
+                animator.update();
+                animator.draw();
+                redrew = true;
+            }
+
+            if (redrew) {
+                // Bandeau démo (drawStatusBanner ignore DEMO_MODE), repeint
+                // après le sprite qui recouvre la bande du bas.
+                M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
+                M5.Lcd.setTextFont(2);
+                M5.Lcd.setTextSize(1);
+                M5.Lcd.setTextColor(0xFDE0, BLACK);
+                M5.Lcd.setCursor(10, 221);
+                M5.Lcd.print("DEMO - press any button to exit");
+            }
+
+            // Cycle des animations LED : 4 s par etat, toute la vitrine y passe.
+            switch (((now - demoStartTime) / 4000) % 7) {
+                case 0: led::welcome(); break;
+                case 1: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING); break;
+                case 2: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::TOOL_EXEC); break;
+                case 3: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::READING); break;
+                case 4: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::STREAMING); break;
+                case 5: led::setAgentState(AgentState::WAITING); break;
+                case 6: led::setAgentState(AgentState::DONE, false); break;
+            }
+
+            // Sortie : n'importe quel bouton -> retour welcome (le device
+            // reste détectable : pings). La v1 sortait par C long mais
+            // réutilisait buttonCTracking, remis à zéro chaque frame par le
+            // tracker du menu -> sortie impossible.
+            if (buttonManager.wasPressed(AppButton::A) ||
+                buttonManager.wasPressed(AppButton::B) ||
+                buttonManager.wasPressed(AppButton::C)) {
+                currentState = AppState::WELCOME;
                 forceRedraw = true;
             }
             break;

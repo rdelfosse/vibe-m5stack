@@ -91,9 +91,9 @@ void ConfigMenu::draw(bool forced) {
     M5.Lcd.setTextFont(2);
     M5.Lcd.setTextSize(1);
     
-    // 6 items : 44 + 6*29 = 218 < 225 (bandeau d'aide) — tient sur 240 px.
-    const int ITEM_HEIGHT = 29;
-    const int ITEM_Y_START = 44;
+    // 7 items : 40 + 7*26 = 222 < 225 (bandeau d'aide) — tient sur 240 px.
+    const int ITEM_HEIGHT = 26;
+    const int ITEM_Y_START = 40;
     const int ITEM_X = 20;
     const int SELECTOR_X = 5;
     
