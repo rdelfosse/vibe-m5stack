@@ -361,7 +361,11 @@ void loop() {
                 } else if (currentState == AppState::SHOWING_REQUEST) {
                     voiceMode = VoiceMode::APPROVE;
                     voiceRequestId = serialProtocol.getRequestId();
-                    prevState = currentState;
+                    // NE PAS écraser prevState : il pointe sur l'état d'AVANT
+                    // l'approbation — c'est là qu'on retourne au relâchement
+                    // (l'approbation sera résolue par notre APPROVED). Sinon
+                    // retour vers SHOWING_REQUEST déjà résolu -> écran figé
+                    // puis boucle de timeout/CANCELLED.
                     currentState = AppState::LISTENING;
                     forceRedraw = true;
                 }
@@ -440,7 +444,7 @@ void loop() {
                 buttonBLongFired = true;
                 voiceMode = VoiceMode::REJECT;
                 voiceRequestId = serialProtocol.getRequestId();
-                prevState = currentState;
+                // prevState conservé (état d'avant l'approbation), cf. approve.
                 currentState = AppState::LISTENING;
                 forceRedraw = true;
                 voiceMicDevice = (configManager.get().micSource == MicSource::DEVICE);
@@ -801,7 +805,11 @@ void loop() {
             if (timeout) {
                 serialProtocol.sendResponse(requestId, ApprovalResponse::CANCELLED);
                 led::off();
-                currentState = prevState;
+                // Garde-fou anti-boucle : si prevState pointe (encore) sur
+                // SHOWING_REQUEST, retomber sur DONE plutôt que de re-entrer
+                // ici à chaque frame (spam CANCELLED + reset plein écran).
+                currentState = (prevState == AppState::SHOWING_REQUEST)
+                    ? AppState::DONE : prevState;
                 animator.reset();
                 if (serialProtocol.hasCreditInfo()) {
                     animator.setCreditInfo(serialProtocol.getCreditPercent(), true);
