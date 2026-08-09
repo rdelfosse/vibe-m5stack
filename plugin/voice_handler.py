@@ -112,8 +112,19 @@ class VoiceHandler:
             logger.warning(f"Audio incomplete: {len(data)}/{total} octets (chunks perdus)")
 
         mode, request_id = session["mode"], session["id"]
-        duration_ms = len(data) * 1000 // 16000  # µ-law 16 kHz : 1 octet/éch.
-        logger.info(f"Device audio received: {len(data)} octets (~{duration_ms} ms)")
+        capture_ms = msg.get("ms") or 0
+        logger.info(
+            f"Device audio received: {len(data)} octets, capture réelle {capture_ms} ms"
+        )
+
+        # L'I2S-ADC de l'ESP32 ne tient pas la fréquence demandée : recaler le
+        # flux sur 16 kHz d'après la durée mesurée par le device.
+        if capture_ms > 200 and len(data) > 0:
+            actual_rate = len(data) * 1000.0 / capture_ms
+            if abs(actual_rate - 16000) / 16000 >= 0.03:
+                from plugin.voice import resample_ulaw
+                logger.info(f"Resampling: débit ADC effectif {actual_rate:.0f} Hz -> 16000 Hz")
+                data = resample_ulaw(data, actual_rate)
 
         if len(data) < 1600:  # < 100 ms : rien d'exploitable
             logger.warning("Device audio too short")

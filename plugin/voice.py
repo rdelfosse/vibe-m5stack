@@ -230,3 +230,52 @@ def ulaw_to_wav(ulaw_bytes):
         wav_file.setframerate(SAMPLE_RATE)
         wav_file.writeframes(pcm)
     return wav_buffer.getvalue()
+
+
+def resample_ulaw(ulaw_bytes, actual_rate, target_rate=SAMPLE_RATE):
+    """Rééchantillonne (linéaire) un flux µ-law capturé à actual_rate vers 16 kHz.
+
+    L'I2S-ADC de l'ESP32 ne tient pas exactement la fréquence demandée : le
+    device mesure sa durée réelle de capture, le PC en déduit actual_rate et
+    corrige ici avant l'appel Voxtral (sinon la voix est ralentie/accélérée
+    et la transcription échoue).
+    """
+    if actual_rate <= 0 or abs(actual_rate - target_rate) / target_rate < 0.03:
+        return ulaw_bytes  # écart < 3 % : inaudible pour la STT
+    lut = _ulaw_lut()
+    pcm = [lut[b] for b in ulaw_bytes]
+    n_out = int(len(pcm) * target_rate / actual_rate)
+    if n_out < 2:
+        return ulaw_bytes
+    out = bytearray(n_out)
+    ratio = (len(pcm) - 1) / (n_out - 1)
+    # ré-encode en µ-law via la fonction inverse (recherche par table inverse
+    # simple : on repasse par PCM16 -> WAV se fait ailleurs, ici on garde µ-law)
+    for i in range(n_out):
+        pos = i * ratio
+        i0 = int(pos)
+        frac = pos - i0
+        i1 = min(i0 + 1, len(pcm) - 1)
+        sample = int(pcm[i0] * (1 - frac) + pcm[i1] * frac)
+        out[i] = _pcm16_to_ulaw(sample)
+    return bytes(out)
+
+
+def _pcm16_to_ulaw(pcm):
+    """Encodeur G.711 µ-law (miroir de linear2ulaw côté firmware)."""
+    BIAS = 0x84
+    CLIP = 32635
+    sign = 0
+    if pcm < 0:
+        pcm = -pcm
+        sign = 0x80
+    if pcm > CLIP:
+        pcm = CLIP
+    pcm += BIAS
+    exponent = 7
+    mask = 0x4000
+    while (pcm & mask) == 0 and exponent > 0:
+        exponent -= 1
+        mask >>= 1
+    mantissa = (pcm >> (exponent + 3)) & 0x0F
+    return ~(sign | (exponent << 4) | mantissa) & 0xFF

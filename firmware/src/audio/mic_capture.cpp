@@ -29,6 +29,11 @@ static const int MIC_GAIN_SHIFT = 2;  // x4
 static uint8_t* s_buffer = nullptr;
 static size_t s_size = 0;
 static bool s_active = false;
+static uint32_t s_startMs = 0;
+static uint32_t s_durationMs = 0;
+// Suppression DC dynamique (IIR) : la polarisation réelle du MEMS n'est pas
+// exactement 2048 et dérive — un offset fixe laissait un DC massif.
+static int32_t s_dcEstimate = 2048 << 8;
 
 // G.711 µ-law : 16 bits signés -> 8 bits log. Suffisant pour de la parole STT,
 // et divise par deux le volume à transférer sur le lien BT.
@@ -67,7 +72,9 @@ bool micCaptureStart() {
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_ADC_BUILT_IN);
     cfg.sample_rate = MIC_SAMPLE_RATE;
     cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
-    cfg.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+    // ONLY_RIGHT : l'ADC intégré livre ses données sur le slot droit (cf.
+    // exemples officiels M5Stack Microphone). ONLY_LEFT donnait du garbage.
+    cfg.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT;
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
     cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count = 4;
@@ -84,6 +91,9 @@ bool micCaptureStart() {
         return false;
     }
     s_active = true;
+    s_startMs = millis();
+    s_durationMs = 0;
+    s_dcEstimate = 2048 << 8;
     return true;
 }
 
@@ -100,10 +110,13 @@ bool micCapturePump() {
         i2s_read(MIC_I2S_PORT, raw, sizeof(raw), &bytesRead, 0);
         size_t samples = bytesRead / 2;
         for (size_t i = 0; i < samples; i++) {
-            if (s_size >= MIC_BUFFER_SIZE) return false;  // 10 s atteintes
-            // Échantillon ADC 12 bits (canal dans les 4 bits hauts) centré sur
-            // ~2048 (polarisation VCC/2 du MEMS), remis en signé + gain.
-            int32_t s = (int32_t)(raw[i] & 0x0FFF) - 2048;
+            if (s_size >= MIC_BUFFER_SIZE) return false;  // borne 60 s atteinte
+            // Échantillon ADC 12 bits (canal dans les 4 bits hauts).
+            int32_t adc = (int32_t)(raw[i] & 0x0FFF);
+            // Retrait de la composante continue par IIR (alpha = 1/256) :
+            // suit la polarisation réelle du MEMS et sa dérive.
+            s_dcEstimate += ((adc << 8) - s_dcEstimate) >> 8;
+            int32_t s = adc - (s_dcEstimate >> 8);
             s <<= (4 + MIC_GAIN_SHIFT);   // 12 -> 16 bits, puis gain
             if (s > 32767) s = 32767;
             if (s < -32768) s = -32768;
@@ -117,6 +130,7 @@ void micCaptureStop() {
     if (!s_active) return;
     // Dernier drain avant de couper (récupère la fin de la phrase).
     micCapturePump();
+    s_durationMs = millis() - s_startMs;
     i2s_adc_disable(MIC_I2S_PORT);
     i2s_driver_uninstall(MIC_I2S_PORT);
     s_active = false;
@@ -124,6 +138,7 @@ void micCaptureStop() {
 
 const uint8_t* micCaptureData() { return s_buffer; }
 size_t micCaptureSize() { return s_size; }
+uint32_t micCaptureDurationMs() { return s_durationMs; }
 
 void micCaptureRelease() {
     if (s_buffer != nullptr) {

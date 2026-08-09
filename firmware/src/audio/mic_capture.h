@@ -48,5 +48,10 @@ void micCaptureStop();
 const uint8_t* micCaptureData();
 size_t micCaptureSize();
 
+// Durée réelle de la capture (ms), mesurée à l'horloge du device : permet au
+// PC de calculer le débit effectif de l'ADC (les quirks I2S-ADC de l'ESP32
+// font dériver la fréquence réelle) et de rééchantillonner à 16 kHz.
+uint32_t micCaptureDurationMs();
+
 // Libère le buffer PSRAM (fin d'upload ou abandon).
 void micCaptureRelease();

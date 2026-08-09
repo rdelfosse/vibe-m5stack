@@ -111,10 +111,12 @@ static void pumpAudioStream() {
         return;
     }
 
-    // Fin de session : tout est parti -> clore et libérer.
+    // Fin de session : tout est parti -> clore et libérer. `ms` = durée réelle
+    // de capture, pour que le PC calcule le débit effectif et rééchantillonne.
     if (audioStreamFinishing && audioStreamPos >= total) {
-        bridgeSerial.printf("{\"type\":\"audio_end\",\"seq\":%u,\"total\":%u}\n",
-                            (unsigned)audioStreamSeq, (unsigned)total);
+        bridgeSerial.printf("{\"type\":\"audio_end\",\"seq\":%u,\"total\":%u,\"ms\":%u}\n",
+                            (unsigned)audioStreamSeq, (unsigned)total,
+                            (unsigned)micCaptureDurationMs());
         audioStreamActive = false;
         micCaptureRelease();
         return;
