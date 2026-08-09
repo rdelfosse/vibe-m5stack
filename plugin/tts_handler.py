@@ -610,9 +610,22 @@ async def speak_text(text: str, broker_mgr=None, vibe_config=None) -> bool:
             logger.warning("Could not create TTS client")
             return False
         
-        # Synthesize speech
+        # Synthesize speech — timeout dur : un endpoint qui pend ne doit pas
+        # laisser une task fantôme (c'était invisible dans les logs).
         logger.info(f"Synthesizing speech: {clean_text[:60]}...")
-        result = await tts.speak(clean_text)
+        t0 = time.monotonic()
+        try:
+            result = await asyncio.wait_for(tts.speak(clean_text), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error("TTS speak() timeout (30 s)")
+            return False
+        except asyncio.CancelledError:
+            logger.info("TTS annulé (nouveau tour ou stop)")
+            raise
+        logger.info(
+            f"TTS: {len(result.audio_data)} octets en {time.monotonic() - t0:.1f}s, "
+            f"magie={result.audio_data[:4]!r}"
+        )
         
         # Handle result
         if mode == VoiceOutMode.PC:

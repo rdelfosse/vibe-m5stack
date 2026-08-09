@@ -82,6 +82,13 @@ static VoiceMode voiceMode = VoiceMode::PROMPT;
 static uint32_t voiceRequestId = 0;
 static bool voiceMicDevice = false;   // session en cours : micro embarqué ?
 
+// Annonces de config au PC (debug / voice out) : en portée fichier pour être
+// ré-armées par le handler RX après un silence (session PC redémarrée).
+static bool debugStateAnnounced = false;
+static bool lastAnnouncedDebug = false;
+static bool voutStateAnnounced = false;
+static VoiceOutMode lastAnnouncedVout = VoiceOutMode::OFF;
+
 
 // -- Streaming audio (micro device) : machine à états non bloquante ---------
 // Les chunks µ-law (1 Ko brut -> ~1,4 Ko base64) partent PENDANT
@@ -567,16 +574,16 @@ void loop() {
 
     // Annonce du mode debug au PC : au boot et à chaque changement (le menu
     // peut le toggler à tout moment). Les pings le portent aussi (reconnexion).
-    static bool debugStateAnnounced = false;
-    static bool lastAnnouncedDebug = false;
+    // (déclaré en portée fichier pour le reset après silence RX)
+
     if (!debugStateAnnounced || configManager.get().debugMode != lastAnnouncedDebug) {
         lastAnnouncedDebug = configManager.get().debugMode;
         debugStateAnnounced = true;
         bridgeSerial.printf("{\"type\":\"config\",\"debug\":%d}\n", lastAnnouncedDebug ? 1 : 0);
     }
     // Annonce du mode Voice Out au PC : même mécanique que debug.
-    static bool voutStateAnnounced = false;
-    static VoiceOutMode lastAnnouncedVout = VoiceOutMode::OFF;
+
+
     if (!voutStateAnnounced || configManager.get().voiceOutMode != lastAnnouncedVout) {
         lastAnnouncedVout = configManager.get().voiceOutMode;
         voutStateAnnounced = true;
@@ -588,6 +595,13 @@ void loop() {
 
     // Handle serial communication
     if (serialProtocol.receive()) {
+        // Reprise après silence RX (session PC (re)démarrée) : ré-annoncer la
+        // config — l'annonce du boot part dans le vide si personne n'écoute,
+        // et le PC croirait Voice Out/Debug éteints jusqu'au prochain toggle.
+        if (now - lastRxMs > 10000) {
+            debugStateAnnounced = false;
+            voutStateAnnounced = false;
+        }
         lastRxMs = now;
         MessageType msgType = serialProtocol.getMessageType();
 
