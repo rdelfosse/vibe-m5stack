@@ -25,6 +25,7 @@ static const char* NVS_KEY_MAGIC = "magic";
 static const char* NVS_KEY_QUIET = "quiet";
 static const char* NVS_KEY_BRIGHT = "bright";
 static const char* NVS_KEY_MODEL = "model";
+static const char* NVS_KEY_DEMO = "demo";
 static const char* NVS_KEY_DEBUG = "debug";
 static const char* NVS_KEY_MIC = "mic";
 
@@ -81,6 +82,12 @@ void ConfigManager::setLedBrightness(uint8_t brightness) {
 
 void ConfigManager::setModel(DeviceModel model) {
     currentConfig.model = model;
+    if (initialized) {
+        save();
+    }
+}
+void ConfigManager::setDemoMode(bool enabled) {
+    currentConfig.demoMode = enabled;
     if (initialized) {
         save();
     }
@@ -148,6 +155,12 @@ void ConfigManager::toggleMicSource() {
         save();
     }
 }
+void ConfigManager::toggleDemoMode() {
+    currentConfig.demoMode = !currentConfig.demoMode;
+    if (initialized) {
+        save();
+    }
+}
 
 bool ConfigManager::load() {
     Preferences preferences;
@@ -184,6 +197,7 @@ bool ConfigManager::load() {
     currentConfig.model = (modelValue <= static_cast<uint8_t>(DeviceModel::CHATON_FAT)) 
         ? static_cast<DeviceModel>(modelValue) 
         : DeviceModel::MISTRAL;
+    currentConfig.demoMode = preferences.getBool(NVS_KEY_DEMO, false);
     
     preferences.end();
     return true;
@@ -205,6 +219,7 @@ bool ConfigManager::save() {
     preferences.putUChar(NVS_KEY_MIC, currentConfig.micSource == MicSource::PC ? 1 : 0);
     preferences.putUChar(NVS_KEY_BRIGHT, currentConfig.ledBrightness);
     preferences.putUChar(NVS_KEY_MODEL, static_cast<uint8_t>(currentConfig.model));
+    preferences.putBool(NVS_KEY_DEMO, currentConfig.demoMode);
     
     preferences.end();
     return true;
@@ -215,5 +230,6 @@ void ConfigManager::applyDefaults() {
     currentConfig.debugMode = false;   // debug OFF par défaut (logs sobres)
     currentConfig.micSource = MicSource::DEVICE;  // micro embarqué par défaut
     currentConfig.ledBrightness = 32;
+    currentConfig.demoMode = false;
     currentConfig.model = DeviceModel::MISTRAL;
 }

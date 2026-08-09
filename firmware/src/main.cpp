@@ -43,6 +43,7 @@ enum class AppState {
     ERROR_STATE,
     DEAD,
     STUCK,
+    DEMO_MODE,
     CONFIG_MENU,
     LISTENING,
     TRANSCRIBING
@@ -656,6 +657,12 @@ void loop() {
             if (::millis() - lastPingTime > 5000) {
                 bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
                                     FW_VERSION, configManager.get().debugMode ? 1 : 0);
+            // Auto-enter demo mode if enabled and no PC connection
+            static uint32_t welcomeEntryTime = now;
+            if (configManager.get().demoMode && now - welcomeEntryTime > 10000) {
+                currentState = AppState::DEMO_MODE;
+                forceRedraw = true;
+            }
                 lastPingTime = ::millis();
             }
             break;
@@ -736,6 +743,44 @@ void loop() {
             break;
         }
 
+        case AppState::DEMO_MODE: {
+            static uint32_t demoStartTime = 0;
+            if (justEntered) {
+                demoStartTime = now;
+                led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING);
+                forceRedraw = true;
+            }
+            
+            // Run demo animations
+            led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING);  // false = update only (internal state manages the show)
+            
+            // Draw demo info on screen
+            M5.Lcd.fillRect(0, 0, 320, 240, BLACK);
+            M5.Lcd.setTextFont(2);
+            M5.Lcd.setTextSize(2);
+            M5.Lcd.setTextColor(0xFDE0, BLACK);
+            M5.Lcd.setCursor(40, 60);
+            M5.Lcd.print("DEMO MODE");
+            M5.Lcd.setTextSize(1);
+            M5.Lcd.setCursor(20, 120);
+            M5.Lcd.print("Mistral Vibe M5Stack");
+            M5.Lcd.setCursor(20, 160);
+            M5.Lcd.print("No PC connection needed");
+            
+            // Check for exit (long press C)
+            if (buttonManager.isHeld(AppButton::C) && !buttonCTracking) {
+                buttonCTracking = true;
+                buttonCHoldStart = now;
+            } else if (buttonCTracking && !buttonManager.isHeld(AppButton::C)) {
+                buttonCTracking = false;
+            } else if (buttonCTracking && now - buttonCHoldStart >= 1000) {
+                currentState = AppState::IDLE;
+                buttonCTracking = false;
+                led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING);
+                forceRedraw = true;
+            }
+            break;
+        }
         case AppState::CONFIG_MENU: {
             static bool menuWaitCRelease = false;
             static uint32_t menuCHoldStart = 0;

@@ -135,6 +135,11 @@ void ConfigMenu::draw(bool forced) {
                 M5.Lcd.printf("Mic: > %s\n", micStr);
                 break;
             }
+            case ConfigMenuItem::DEMO_MODE: {
+                const char* demoStr = configManager.get().demoMode ? "ON" : "OFF";
+                M5.Lcd.printf("Demo Mode: > %s\n", demoStr);
+                break;
+            }
             case ConfigMenuItem::EXIT:
                 M5.Lcd.setTextColor(0xF800, BLACK);  // Red
                 M5.Lcd.printf("Exit\n");
@@ -204,6 +209,9 @@ void ConfigMenu::selectItem() {
         case ConfigMenuItem::MIC_SOURCE:
             configManager.toggleMicSource();
             break;
+        case ConfigMenuItem::DEMO_MODE:
+            toggleDemoMode();
+            break;
         case ConfigMenuItem::EXIT:
             // Handled in update()
             break;
@@ -222,4 +230,8 @@ void ConfigMenu::cycleBrightness(bool forward) {
 
 void ConfigMenu::cycleModel(bool forward) {
     configManager.cycleModel(forward);
+}
+
+void ConfigMenu::toggleDemoMode() {
+    configManager.toggleDemoMode();
 }
