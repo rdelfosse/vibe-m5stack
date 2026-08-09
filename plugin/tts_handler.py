@@ -142,28 +142,33 @@ def clean_and_truncate_text(text: str, max_chars: int = 500) -> str:
     if not text:
         return ""
     
-    # Remove code blocks (```...``` or ~~~...~~~)
-    text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
-    text = re.sub(r'~~~.*?~~~', '', text, flags=re.DOTALL)
+    # Remove code blocks (```...``` or ~~~...~~~) - preserve surrounding spaces
+    text = re.sub(r'```.*?```', ' ', text, flags=re.DOTALL)
+    text = re.sub(r'~~~.*?~~~', ' ', text, flags=re.DOTALL)
     
-    # Remove inline code (`...`)
-    text = re.sub(r'`[^`]*`', '', text)
+    # Remove inline code (`...`) - preserve surrounding spaces
+    text = re.sub(r'`[^`]*`', ' ', text)
     
-    # Remove markdown formatting
-    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # bold
-    text = re.sub(r'\*([^*]+)\*', r'\1', text)      # italic
-    text = re.sub(r'__([^_]+)__', r'\1', text)       # underline
-    text = re.sub(r'--([^-]+)--', r'\1', text)       # strikethrough
+    # Remove markdown formatting - preserve surrounding spaces
+    # Bold: **...** or __...
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    # Italic: *...* or _..._
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'_(?![_])([^_]+?)(?<![_])_', r'\1', text)
+    # Strikethrough: ~~...~~
+    text = re.sub(r'~~([^~]+)~~', r'\1', text)
     
-    # Remove links and images
-    text = re.sub(r'\[[^\]]*\]\([^)]*\)', '', text)
-    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', text)
+    # Remove links and images - preserve surrounding spaces
+    text = re.sub(r'\[[^\]]*\]\([^)]*\)', ' ', text)
+    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', ' ', text)
     
-    # Remove HTML tags
-    text = re.sub(r'<[^>]+>', '', text)
+    # Remove HTML tags - preserve surrounding spaces
+    text = re.sub(r'<[^>]+>', ' ', text)
     
-    # Collapse multiple newlines
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Collapse multiple spaces and newlines
+    text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces -> single space
+    text = re.sub(r'\n{2,}', '\n\n', text)  # Multiple newlines -> double newline
     
     # Remove leading/trailing whitespace
     text = text.strip()
