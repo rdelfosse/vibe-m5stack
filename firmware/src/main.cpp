@@ -772,19 +772,38 @@ void loop() {
                 redrew = true;
             }
 
-            if (redrew) {
-                // Bandeau démo (drawStatusBanner ignore DEMO_MODE), repeint
-                // après le sprite qui recouvre la bande du bas.
+            // Cycle des animations LED : 4 s par état, toute la vitrine y passe.
+            uint32_t phase = ((now - demoStartTime) / 4000) % 7;
+
+            // Bandeau : nom (et couleur) de l'état illustré par les LED.
+            // Repeint quand le sprite a écrasé la bande du bas OU au
+            // changement de phase (nécessaire pour le Chaton Fat, statique).
+            static uint32_t lastPhase = 99;
+            if (justEntered) lastPhase = 99;
+            if (redrew || phase != lastPhase) {
+                lastPhase = phase;
+                static const char* PHASE_LABELS[7] = {
+                    "Welcome", "Thinking...", "Running...", "Reading...",
+                    "Writing...", "Waiting for you...", "Ready"
+                };
+                static const uint16_t PHASE_COLORS[7] = {
+                    WHITE, CYAN, CYAN, CYAN, CYAN, 0xFDE0, GREEN
+                };
                 M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
                 M5.Lcd.setTextFont(2);
                 M5.Lcd.setTextSize(1);
                 M5.Lcd.setTextColor(0xFDE0, BLACK);
                 M5.Lcd.setCursor(10, 221);
-                M5.Lcd.print("DEMO - press any button to exit");
+                M5.Lcd.print("DEMO");
+                M5.Lcd.setTextColor(PHASE_COLORS[phase], BLACK);
+                M5.Lcd.setCursor(60, 221);
+                M5.Lcd.print(PHASE_LABELS[phase]);
+                M5.Lcd.setTextColor(0x8888, BLACK);
+                M5.Lcd.setCursor(240, 221);
+                M5.Lcd.print("btn = exit");
             }
 
-            // Cycle des animations LED : 4 s par etat, toute la vitrine y passe.
-            switch (((now - demoStartTime) / 4000) % 7) {
+            switch (phase) {
                 case 0: led::welcome(); break;
                 case 1: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING); break;
                 case 2: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::TOOL_EXEC); break;
