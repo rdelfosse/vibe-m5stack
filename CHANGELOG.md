@@ -9,17 +9,40 @@ En pré-1.0, la version *minor* (0.X.0) est incrémentée pour les nouvelles fon
 et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
-## [0.5.0] - 2026-08-08
+## [0.5.0] - 2026-08-09
 
 ### Ajouté
-- **Instructions vocales push-to-talk** : parler au M5Stack pour donner des instructions à Vibe
-  - Appui long **A** en IDLE/WELCOME : nouvelle instruction vocale (mode prompt)
-  - Appui long **A** en approbation : approuver immédiatement + commentaire vocal injecté en follow-up
-  - Appui long **B** en approbation : rejeter avec consigne vocale comme raison du refus
-  - État visuel **LISTENING** avec animation LED pendant l'enregistrement
-  - Le micro est celui du PC, transcription via **Mistral Voxtral API**
-  - Protocole série : messages `{"type":"voice","action":"start|stop","mode":"prompt|approve|reject","id":X}`
-  - Feedback PC → device : `{"type":"voice_ack","state":"transcribing|done","text":"..."}`
+- **Instructions vocales push-to-talk, micro embarqué** : parler AU M5Stack (MEMS
+  du socle M5GO) pour piloter Vibe, sans rester derrière le PC
+  - Appui long **A** (Ready/welcome) : nouvelle instruction vocale — le texte
+    apparaît dans Vibe comme un vrai message et démarre un tour
+  - Appui long **A** en approbation : approuver immédiatement + commentaire
+    dicté injecté dans le tour EN COURS (pilote la todo en direct)
+  - Appui long **B** en approbation : rejeter avec la consigne dictée comme
+    raison du refus ; appuis courts A/B/C inchangés
+  - Audio **streamé en direct** pendant l'enregistrement sur le lien Bluetooth
+    (G.711 µ-law 16 kHz, décimation anti-repliement, base64 par chunks) —
+    latence quasi nulle au relâchement, jusqu'à 60 s de dictée
+  - Auto-calibration du débit ADC (durée mesurée par le device, rééchantillonnage
+    côté PC) ; transcription **Mistral Voxtral**, clé résolue comme Vibe
+    (variable d'env ou keyring du login navigateur)
+  - États visuels **LISTENING** / **TRANSCRIBING** avec animation LED dédiée
+  - Item de menu **Mic : Device / PC** (fallback micro PC conservé)
+- **Mode démo** (dicté à la voix depuis le canapé 🛋️) : item de menu « Demo
+  Mode » ; sans session PC, le device enchaîne les 7 animations LED (welcome,
+  activités thinking, waiting, done), chaque état légendé à l'écran dans sa
+  couleur, chat animé ou Chaton Fat en vedette ; sortie par n'importe quel bouton
+- **Mode debug** : item de menu « Debug » (OFF par défaut) — audit des flux côté
+  PC (dump `last_ptt.wav`, logs de capture) uniquement quand il est actif
+- **Reconnexion à chaud** : un reboot du device (flash, coupure BT) ne tue plus
+  la session vibe-m5stack — reconnexion automatique et resynchronisation
+
+### Corrigé
+- Écran d'approbation non bloquant : les boutons sont gérés dans la boucle
+  principale (l'ancienne boucle bloquante transformait chaque appui en skip)
+- Deadlocks de verrous dans la capture audio PC (record_stop/cancel)
+- Capture micro PC sans numpy (RawInputStream) ; SDK mistralai 2.x
+  (`mistralai.client.Mistral`, `transcriptions.complete`)
 
 ## [0.4.0] - 2026-08-08
 
