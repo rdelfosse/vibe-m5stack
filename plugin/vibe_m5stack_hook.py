@@ -457,8 +457,40 @@ async def m5stack_approval_callback(
 # -- Monkey patching --------------------------------------------------------
 
 
+async def _resolve_via_tui(response, feedback):
+    """Répond au callback d'approbation de la TUI, comme un clic dans la modal.
+
+    En 2.24 la TUI ne parle plus à l'AgentLoop : elle passe par l'app_server
+    (respond_to_callback). Résoudre seulement au niveau du loop fait avancer
+    l'agent mais laisse la modal ApprovalApp affichée et le pipeline de
+    callbacks de la TUI pendu. _respond_to_approval fait tout : réponse au
+    callback, fermeture de la modal, retour à l'input.
+
+    Retourne True si la résolution TUI a été effectuée.
+    """
+    tui = _tui_instance
+    if tui is None or not hasattr(tui, "_respond_to_approval"):
+        return False
+    try:
+        from vibe.app_server.models import ApprovalDecisionType
+    except Exception:
+        return False
+    # Le device peut répondre avant que la TUI n'ait affiché le callback :
+    # attendre (brièvement) qu'il soit actif.
+    for _ in range(30):  # <= 3 s
+        if getattr(tui, "_active_callback", None) is not None:
+            break
+        await asyncio.sleep(0.1)
+    if getattr(tui, "_active_callback", None) is None:
+        return False
+    decision = (ApprovalDecisionType.APPROVE if response == ApprovalResponse.YES
+                else ApprovalDecisionType.DENY)
+    await tui._respond_to_approval(decision, feedback)
+    return True
+
+
 async def _race_m5stack_approval(agent_loop, ev):
-    """Demande au device ; s'il répond avant la TUI, résout via l'API publique."""
+    """Demande au device ; s'il répond avant la TUI, résout comme un clic."""
     global _active_broker_request_id
     # Publie l'uuid broker de l'approbation en cours pour le reject vocal
     # (l'id série int du device ne peut pas transporter l'uuid).
@@ -469,10 +501,12 @@ async def _race_m5stack_approval(agent_loop, ev):
         )
         if response_feedback is not None:
             response, feedback = response_feedback
-            # Ignoré silencieusement par le broker si la TUI a déjà résolu.
-            agent_loop.resolve_approval_request(ev.request_id, response, feedback)
-            # Best-effort : signaler à la TUI que le device a tranché (sa
-            # modal ne s'auto-ferme pas forcément sur une résolution externe).
+            resolved = await _resolve_via_tui(response, feedback)
+            if not resolved:
+                # Pas de TUI (headless / capture manquée) : résoudre au moins
+                # au niveau du loop pour ne pas bloquer l'agent. Ignoré par le
+                # broker si déjà résolu.
+                agent_loop.resolve_approval_request(ev.request_id, response, feedback)
             tui = _tui_instance
             if tui is not None:
                 try:
@@ -629,19 +663,26 @@ def install_hook():
             résout RIEN (jamais à l'aveugle).
             """
             loop = _asyncio_loop
-            agent_loop = _agent_loop
             broker_rid = _active_broker_request_id
-            if agent_loop is None or loop is None or broker_rid is None:
+            if loop is None or broker_rid is None:
                 logger.warning(
                     f"Voice resolve dropped (no pending approval): serial_id={request_id}"
                 )
                 return
             response = ApprovalResponse.YES if approved else ApprovalResponse.NO
-            # resolve_approval_request est SYNCHRONE (il complète une Future du
-            # broker) : call_soon_threadsafe depuis le thread de transcription.
-            loop.call_soon_threadsafe(
-                agent_loop.resolve_approval_request, broker_rid, response, text
-            )
+
+            async def _do_resolve():
+                # Chemin normal : via le callback de la TUI (ferme la modal).
+                if await _resolve_via_tui(response, text):
+                    return
+                # Fallback loop-level (headless) — resolve_approval_request
+                # est SYNCHRONE, appel direct depuis la loop.
+                agent_loop = _agent_loop
+                if agent_loop is not None:
+                    agent_loop.resolve_approval_request(broker_rid, response, text)
+
+            # Depuis le thread de transcription -> planifier sur la loop TUI.
+            asyncio.run_coroutine_threadsafe(_do_resolve(), loop)
             logger.info(f"Voice approval resolved: broker_id={broker_rid}, approved={approved}")
         handler.set_resolve_approval_callback(resolve_approval_callback)
 
