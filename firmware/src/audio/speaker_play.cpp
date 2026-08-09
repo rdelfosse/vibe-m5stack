@@ -146,8 +146,9 @@ bool speakerPlayStart() {
         return false;
     }
     
-    // Configurer le GPIO DAC
-    i2s_set_dac_mode(I2S_MODE_DAC_BUILT_IN);
+    // HP du Fire sur GPIO 25 = DAC canal 1 = slot DROIT de l'I2S.
+    // (i2s_set_dac_mode attend un i2s_dac_mode_t, pas un i2s_mode_t.)
+    i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
     
     // Démarrer la tâche de lecture
     s_active = true;

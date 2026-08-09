@@ -624,7 +624,10 @@ def patch_act_for_status():
             async for ev in _orig_act(self, msg, *args, **kwargs):
                 # Accumulate AssistantEvent text for TTS (P2)
                 if isinstance(ev, AssistantEvent):
-                    _assistant_text_parts.append(ev.data.text if hasattr(ev.data, 'text') else str(ev.data))
+                    # AssistantEvent porte `content` (pas de champ .data — y
+                    # accéder lèverait une AttributeError DANS le flux du tour
+                    # et casserait chaque tour, Voice Out actif ou non).
+                    _assistant_text_parts.append(ev.content)
                 
                 # Handle approval requests - race M5Stack against TUI
                 if type(ev).__name__ == "ApprovalRequestEvent":

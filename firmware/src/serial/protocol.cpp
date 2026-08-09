@@ -1,6 +1,7 @@
 #include "protocol.h"
 #include "serial_io.h"
 #include <Arduino.h>
+#include <mbedtls/base64.h>
 
 SerialProtocol::SerialProtocol()
     : lastMessageType(MessageType::INVALID), lastRequestId(0),

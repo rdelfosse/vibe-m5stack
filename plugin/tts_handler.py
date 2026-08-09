@@ -199,6 +199,10 @@ def clean_and_truncate_text(text: str, max_chars: int = 500) -> str:
 _ULAW_LUT = None
 
 
+# Encodeur µ-law : réutiliser celui de plugin/voice.py (une seule vérité).
+from plugin.voice import _pcm16_to_ulaw as _voice_pcm16_to_ulaw
+
+
 def _ulaw_lut():
     """Table G.711 µ-law -> PCM16 (256 entrées, construite une fois)."""
     global _ULAW_LUT
@@ -216,23 +220,8 @@ def _ulaw_lut():
 
 
 def _pcm16_to_ulaw(pcm: int) -> int:
-    """Encodeur G.711 µ-law."""
-    BIAS = 0x84
-    CLIP = 32635
-    sign = 0
-    if pcm < 0:
-        pcm = -pcm
-        sign = 0x80
-    if pcm > CLIP:
-        pcm = CLIP
-    pcm += BIAS
-    exponent = 7
-    mask = 0x4000
-    while (pcm & mask) == 0 and exponent > 0:
-        exponent -= 1
-        mask >>= 1
-    mantissa = (pcm >> (exponent + 3)) & 0x0F
-    return ~(sign | (exponent << 4) | mantissa) & 0xFF
+    """Encodeur G.711 µ-law (délègue à plugin.voice — une seule implémentation)."""
+    return _voice_pcm16_to_ulaw(pcm)
 
 
 def wav_to_pcm16(wav_data: bytes) -> tuple[bytes, int, int, int]:
@@ -376,10 +365,13 @@ async def _get_tts_client(vibe_config=None):
         from vibe.cli.tts import make_tts_client
         from vibe.app_server.config import AudioProviderView, TTSModelConfigView
         
-        # Get the Vibe config
+        # Config vivante de l'agent loop OBLIGATOIRE : un VibeConfigSchema()
+        # construit à vide ignore le config.toml réel et lève
+        # MissingAPIKeyError chez les utilisateurs en login navigateur
+        # (clé en keyring, pas en variable d'env).
         if vibe_config is None:
-            from vibe.core.config.vibe_schema import VibeConfigSchema
-            vibe_config = VibeConfigSchema()
+            logger.warning("TTS: pas de config Vibe disponible (tour jamais lancé ?)")
+            return None
         
         # Get active TTS model
         tts_model_config = vibe_config.get_active_tts_model()
@@ -405,10 +397,9 @@ async def _get_tts_client(vibe_config=None):
         _tts_client = make_tts_client(provider, model)
         return _tts_client
         
-    except Exception as e:
-        logger.error(f"Failed to create TTS client: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        # JAMAIS de print/traceback vers stdout/stderr : ça pollue la TUI.
+        logger.exception("Failed to create TTS client")
         return None
 
 
@@ -502,7 +493,7 @@ async def stream_to_device(audio_data: bytes, broker_mgr) -> bool:
         
         # Send tts_stop first to cancel any previous playback
         try:
-            broker_mgr.broker.bridge.send_message({"type": "tts_stop"})
+            broker_mgr.broker.bridge.send({"type": "tts_stop"})
         except Exception:
             pass
         
@@ -513,6 +504,11 @@ async def stream_to_device(audio_data: bytes, broker_mgr) -> bool:
         _state.sent_chunks = 0
         
         for seq in range(_state.total_chunks):
+            # Interruption (bouton device, nouveau tour) : arrêter NET —
+            # sans ce check, un stream de 30 s continuerait dans le vide.
+            if _state.cancel_event.is_set():
+                logger.info(f"TTS stream cancelled at chunk {seq}/{_state.total_chunks}")
+                return False
             start = seq * chunk_size
             end = min((seq + 1) * chunk_size, total_size)
             chunk = ulaw_data[start:end]
@@ -526,7 +522,7 @@ async def stream_to_device(audio_data: bytes, broker_mgr) -> bool:
                 "seq": seq,
                 "data": b64_chunk
             }
-            broker_mgr.broker.bridge.send_message(message)
+            broker_mgr.broker.bridge.send(message)
             _state.sent_chunks += 1
             
             # Pace the sending
@@ -538,7 +534,7 @@ async def stream_to_device(audio_data: bytes, broker_mgr) -> bool:
             "type": "tts_end",
             "total": _state.total_chunks
         }
-        broker_mgr.broker.bridge.send_message(message)
+        broker_mgr.broker.bridge.send(message)
         
         return True
         
@@ -633,10 +629,8 @@ async def speak_text(text: str, broker_mgr=None, vibe_config=None) -> bool:
         
         return success
         
-    except Exception as e:
-        logger.error(f"Speech failed: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        logger.exception("Speech failed")
         return False
     finally:
         _state.is_playing = False

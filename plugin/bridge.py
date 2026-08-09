@@ -257,6 +257,15 @@ class M5StackBridge:
                                 ):
                                     self._handle_voice_message(msg)
                                     continue
+                                # Le device coupe la lecture TTS (bouton) :
+                                # stopper le stream côté PC aussi.
+                                if isinstance(msg, dict) and msg.get("type") == "tts_stop":
+                                    try:
+                                        from plugin import tts_handler
+                                        tts_handler.stop_playback()
+                                    except Exception as e:
+                                        logger.warning(f"tts_stop routing failed: {e}")
+                                    continue
                                 self.message_queue.put(msg)
                             except json.JSONDecodeError:
                                 # Not valid JSON, might be partial

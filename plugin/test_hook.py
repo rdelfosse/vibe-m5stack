@@ -81,7 +81,7 @@ async def test_approval_event_triggers_device_race():
             mock_agent_loop.resolve_approval_request.assert_called_once()
             call_args = mock_agent_loop.resolve_approval_request.call_args
             assert call_args[0][0] == "req-456"
-            assert call_args[0][1] == ApprovalResponse.YES
+            assert call_args[0][1] == hook_module.ApprovalResponse.YES  # liaison du module (ordre-proof)
             assert call_args[0][2] is None
             print("+ Test 1 passed: Approval event triggers device race and resolves")
 
@@ -164,7 +164,7 @@ async def test_device_reject_resolves():
             mock_agent_loop.resolve_approval_request.assert_called_once()
             call_args = mock_agent_loop.resolve_approval_request.call_args
             assert call_args[0][0] == "req-456"
-            assert call_args[0][1] == ApprovalResponse.NO
+            assert call_args[0][1] == hook_module.ApprovalResponse.NO  # liaison du module (ordre-proof)
             assert "M5Stack" in call_args[0][2]
             print("+ Test 4 passed: Device rejection resolves approval with NO")
 
