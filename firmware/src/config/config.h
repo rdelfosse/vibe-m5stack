@@ -21,11 +21,20 @@ enum class DeviceModel {
     CHATON_FAT
 };
 
+// Source du micro pour le push-to-talk
+enum class MicSource {
+    DEVICE,   // MEMS du socle M5GO (GPIO34), audio uploadé vers le PC
+    PC        // micro du PC (sounddevice côté plugin)
+};
+
 // Configuration structure
 struct DeviceConfig {
     bool quietMode;           // true = silent (no vibration/beep)
+    bool debugMode;           // true = le PC dump/logge les flux (audit voix)
+    MicSource micSource;      // micro PTT : device (défaut) ou PC
     uint8_t ledBrightness;    // LED brightness: 16, 32, 64, 128, or 255
     DeviceModel model;        // Active model
+    bool demoMode;            // true = demo mode (autonomous animations, no PC required)
 };
 
 class ConfigManager {
@@ -45,6 +54,7 @@ public:
     void setQuietMode(bool enabled);
     void setLedBrightness(uint8_t brightness);
     void setModel(DeviceModel model);
+    void setDemoMode(bool enabled);
     
     // Cycle through brightness levels
     uint8_t cycleBrightness(bool forward = true);
@@ -54,6 +64,13 @@ public:
     
     // Toggle quiet mode
     void toggleQuietMode();
+
+    // Toggle debug mode (audit des flux côté PC)
+    void toggleDebugMode();
+
+    // Bascule la source micro (Device <-> PC)
+    void toggleMicSource();
+    void toggleDemoMode();
     
 private:
     DeviceConfig currentConfig;

@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include <M5Stack.h>
+#include <mbedtls/base64.h>
+#include "audio/mic_capture.h"
 #include "config/config.h"
 #include "config/config_menu.h"
 #include "display/anim.h"
@@ -24,23 +26,27 @@
 #include "serial/protocol.h"
 #include "serial/serial_io.h"
 
-// Version fallback if not defined by build system
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
 #endif
 
+#define LONGPRESS_MS 500
+
 // Application states
 enum class AppState {
-    WELCOME,        // Welcome screen (boot until first status)
-    IDLE,           // Waiting for approval request (show dancing logo)
-    SHOWING_REQUEST, // Displaying an approval request
-    THINKING,       // Agent is generating/executing
-    WAITING_INPUT,  // Waiting for user input/approval
-    DONE,           // Agent finished its turn
-    ERROR_STATE,   // Exception occurred
-    DEAD,           // Agent dead (watchdog timeout)
-    STUCK,          // Agent stuck (generating forever)
-    CONFIG_MENU     // Configuration menu active
+    WELCOME,
+    IDLE,
+    SHOWING_REQUEST,
+    THINKING,
+    WAITING_INPUT,
+    DONE,
+    ERROR_STATE,
+    DEAD,
+    STUCK,
+    DEMO_MODE,
+    CONFIG_MENU,
+    LISTENING,
+    TRANSCRIBING
 };
 
 AppState currentState = AppState::WELCOME;
@@ -55,19 +61,104 @@ ConfigMenu configMenu(configManager);
 uint32_t lastPingTime = 0;
 
 // Watchdog tracking
-uint32_t lastRxMs = 0;           // Last message received time
-uint32_t lastSeqChangeMs = 0;    // Last seq increment time
-uint32_t lastStatusSeq = 0;     // Last received seq value
-bool statusInitialized = false; // Has first status been received?
+uint32_t lastRxMs = 0;
+uint32_t lastSeqChangeMs = 0;
+uint32_t lastStatusSeq = 0;
+bool statusInitialized = false;
 
 // LED state tracking for transitions
-bool ledFlourishDone = true;    // Has the DONE flourish been shown?
+bool ledFlourishDone = true;
 
-// Configuration-based state (replaces global chatonFatMode)
-volatile bool forceRedraw = false; // Force screen redraw
+// Configuration-based state
+volatile bool forceRedraw = false;
 
 // Thinking activity tracking
 ThinkingActivity currentThinkingActivity = ThinkingActivity::REASONING;
+
+// Voice state tracking
+static uint32_t voiceSessionId = 0;
+static VoiceMode voiceMode = VoiceMode::PROMPT;
+static uint32_t voiceRequestId = 0;
+static bool voiceMicDevice = false;   // session en cours : micro embarqué ?
+
+// -- Streaming audio (micro device) : machine à états non bloquante ---------
+// Les chunks µ-law (1 Ko brut -> ~1,4 Ko base64) partent PENDANT
+// l'enregistrement, dès qu'un chunk complet est disponible. Au relâchement
+// (streamFinishing), on vide le reliquat puis on envoie audio_end.
+static bool audioStreamActive = false;     // session de streaming en cours
+static bool audioStreamFinishing = false;  // capture stoppée : vider puis clore
+static size_t audioStreamPos = 0;
+static uint32_t audioStreamSeq = 0;
+
+static void startAudioStream() {
+    audioStreamActive = true;
+    audioStreamFinishing = false;
+    audioStreamPos = 0;
+    audioStreamSeq = 0;
+}
+
+static void finishAudioStream() {
+    audioStreamFinishing = true;
+}
+
+static void pumpAudioStream() {
+    if (!audioStreamActive) return;
+    const uint8_t* data = micCaptureData();
+    size_t total = micCaptureSize();
+    static const size_t CHUNK = 1024;
+
+    if (data == nullptr) {
+        audioStreamActive = false;
+        return;
+    }
+
+    // Fin de session : tout est parti -> clore et libérer. `ms` = durée réelle
+    // de capture, pour que le PC calcule le débit effectif et rééchantillonne.
+    if (audioStreamFinishing && audioStreamPos >= total) {
+        bridgeSerial.printf("{\"type\":\"audio_end\",\"seq\":%u,\"total\":%u,\"ms\":%u}\n",
+                            (unsigned)audioStreamSeq, (unsigned)total,
+                            (unsigned)micCaptureDurationMs());
+        audioStreamActive = false;
+        micCaptureRelease();
+        return;
+    }
+
+    // Pendant la capture : n'envoyer que des chunks pleins (évite de saturer
+    // le lien de petits messages). En finition : envoyer le reliquat partiel.
+    size_t available = total - audioStreamPos;
+    if (available == 0) return;
+    if (!audioStreamFinishing && available < CHUNK) return;
+
+    size_t n = (available > CHUNK) ? CHUNK : available;
+    static unsigned char b64[((CHUNK + 2) / 3) * 4 + 8];
+    size_t b64len = 0;
+    if (mbedtls_base64_encode(b64, sizeof(b64) - 1, &b64len,
+                              data + audioStreamPos, n) != 0) {
+        audioStreamActive = false;
+        micCaptureRelease();
+        return;
+    }
+    b64[b64len] = 0;
+    bridgeSerial.printf("{\"type\":\"audio\",\"seq\":%u,\"data\":\"", (unsigned)audioStreamSeq);
+    bridgeSerial.print((const char*)b64);
+    bridgeSerial.print("\"}\n");
+    audioStreamSeq++;
+    audioStreamPos += n;
+}
+
+// Button A long-press tracking for voice
+static bool buttonATracking = false;
+static uint32_t buttonAHoldStart = 0;
+static bool buttonALongFired = false;
+
+// Button B long-press tracking for voice
+static bool buttonBTracking = false;
+static uint32_t buttonBHoldStart = 0;
+static bool buttonBLongFired = false;
+
+// Transcribing timeout tracking
+static uint32_t transcribingStartTime = 0;
+static const uint32_t TRANSCRIBING_TIMEOUT_MS = 20000;
 
 void setup() {
     M5.begin();
@@ -123,15 +214,7 @@ void triggerWatchdogAlarm(AppState alarmState) {
     }
 }
 
-// Reset watchdog alarm
-void resetWatchdogAlarm() {
-    // Any key press will reset the alarm state
-    // This is handled in the state machine
-}
-
-// Bandeau de statut en bas d'écran : suit l'état de l'agent (et l'activité de
-// thinking). Couleur assortie à l'animation LED. Doit être (re)dessiné PAR-DESSUS
-// le sprite du chat, sinon celui-ci le recouvre.
+// Bandeau de statut en bas d'ecran
 void drawStatusBanner() {
     const char* text = "";
     uint16_t color = WHITE;
@@ -154,7 +237,7 @@ void drawStatusBanner() {
             color = RED;
             break;
         }
-        default: return;  // DEAD / STUCK / SHOWING_REQUEST : gérés en plein écran
+        default: return;
     }
     M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
     M5.Lcd.setTextFont(2);
@@ -164,22 +247,14 @@ void drawStatusBanner() {
     M5.Lcd.print(text);
 }
 
-// Dessine le chat (throttlé ~8 fps) puis le bandeau par-dessus. `forced` redessine
-// immédiatement (utilisé à l'entrée d'un état pour un bandeau réactif).
-// En mode Chaton Fat, remplace le sprite animé par l'image fixe + bandeau.
+// Dessine le chat (throttled) puis le bandeau par-dessus
 void drawCatBanner(uint32_t now, bool forced) {
     static uint32_t lastCat = 0;
     static bool wasChatonFat = false;
-
     if (configManager.get().model == DeviceModel::CHATON_FAT) {
-        // Chaton Fat mode: sprite fixe, (re)dessiné uniquement sur forced/transition.
         if (forced) {
-            animator.reset(); // Redraw rainbow background
-            // Draw Chaton Fat: 52x43 @ scale 4 = 208x172, centered in 240px area (x40..280)
-            // Center: x = 40 + (240-208)/2 = 56, y = (240-172)/2 = 34
-            drawChatonFat(56, 34, 4, BLACK, WHITE);  // contour noir, corps blanc
-
-            // Draw fake announcement banner (top-right area)
+            animator.reset();
+            drawChatonFat(56, 34, 4, BLACK, WHITE);
             M5.Lcd.fillRect(120, 0, 200, 50, BLACK);
             M5.Lcd.setTextFont(2);
             M5.Lcd.setTextSize(2);
@@ -190,22 +265,15 @@ void drawCatBanner(uint32_t now, bool forced) {
             M5.Lcd.setTextColor(WHITE, BLACK);
             M5.Lcd.setCursor(130, 35);
             M5.Lcd.print("le nouveau modele Mistral");
-
             drawStatusBanner();
             lastCat = now;
         } else if (now - lastCat > 120) {
-            // Le bandeau de statut doit rester vivant (Thinking/Running/Reading…
-            // change sans transition d'état) : on ne fige que le sprite.
             lastCat = now;
             drawStatusBanner();
         }
         wasChatonFat = true;
     } else {
-        // Normal mode: throttled animation
         if (forced || now - lastCat > 120) {
-            // En sortie du mode Chaton Fat, le faux bandeau noir déborde la zone du
-            // sprite (jusqu'à x320) : un reset() plein écran efface ce résidu avant de
-            // redessiner le chat. Sinon une bande noire reste en haut à droite.
             if (wasChatonFat) {
                 animator.reset();
                 wasChatonFat = false;
@@ -222,17 +290,13 @@ void loop() {
     M5.update();
     buttonManager.update();
     
-    // Config menu trigger: long press on C button (1000ms) from IDLE/DONE
-    // Chaton Fat is now a menu item, not a direct toggle
-    static uint32_t buttonCHoldStart = 0;
-    static bool buttonCTracking = false;     // measuring a press in progress
-    static bool buttonCWaitRelease = false;  // long-press done: wait for release
     uint32_t now = ::millis();
 
-    // Only track long-press for config menu when in IDLE or DONE. Ailleurs
-    // (approbation où C = annuler, menu déjà ouvert, thinking…) on ne mesure
-    // rien et on exige un relâchement avant de réarmer — pas de vibration
-    // fantôme hors IDLE/DONE.
+    // Config menu trigger: long press on C button (1000ms) from IDLE/DONE
+    static uint32_t buttonCHoldStart = 0;
+    static bool buttonCTracking = false;
+    static bool buttonCWaitRelease = false;
+
     if (currentState == AppState::IDLE || currentState == AppState::DONE) {
         if (buttonManager.isHeld(AppButton::C)) {
             if (!buttonCWaitRelease) {
@@ -248,7 +312,7 @@ void loop() {
                         buttonManager.vibrate(100, 50);
                     }
                     buttonCTracking = false;
-                    buttonCWaitRelease = true; // wait for release before re-triggering
+                    buttonCWaitRelease = true;
                 }
             }
         } else {
@@ -259,59 +323,263 @@ void loop() {
         buttonCTracking = false;
         buttonCWaitRelease = buttonManager.isHeld(AppButton::C);
     }
-    
-    // Track last message time
-    static uint32_t loopCount = 0;
-    
+
+    // Voice block: root level, after menu block
+    // DONE est l'état « Ready » d'une session vivante (IDLE est quasi
+    // inatteignable après le premier STATUS) : il doit être éligible à la voix.
+    bool inVoiceEligibleState = (currentState == AppState::IDLE ||
+                                  currentState == AppState::DONE ||
+                                  currentState == AppState::WELCOME ||
+                                  currentState == AppState::SHOWING_REQUEST ||
+                                  currentState == AppState::LISTENING);
+
+    if (inVoiceEligibleState) {
+        // Button A tracking for long-press
+        bool aEligible = (currentState == AppState::IDLE ||
+                         currentState == AppState::DONE ||
+                         currentState == AppState::WELCOME ||
+                         currentState == AppState::SHOWING_REQUEST);
+        // Une fois en LISTENING (long-press A parti), le bouton porteur doit
+        // rester suivi jusqu'au relâchement — sinon la branche « release »
+        // se déclenche à la frame suivante avec le bouton encore enfoncé et
+        // la session vocale dure 16 ms.
+        bool aHolding = (currentState == AppState::LISTENING && buttonALongFired);
+
+        if ((aEligible || aHolding) && buttonManager.isHeld(AppButton::A)) {
+            if (!buttonATracking) {
+                buttonATracking = true;
+                buttonAHoldStart = now;
+                buttonALongFired = false;
+            } else if (!buttonALongFired && now - buttonAHoldStart >= LONGPRESS_MS) {
+                buttonALongFired = true;
+                if (currentState == AppState::IDLE || currentState == AppState::DONE ||
+                    currentState == AppState::WELCOME) {
+                    voiceMode = VoiceMode::PROMPT;
+                    voiceRequestId = 0;
+                    prevState = currentState;
+                    currentState = AppState::LISTENING;
+                    forceRedraw = true;
+                } else if (currentState == AppState::SHOWING_REQUEST) {
+                    voiceMode = VoiceMode::APPROVE;
+                    voiceRequestId = serialProtocol.getRequestId();
+                    // NE PAS écraser prevState : il pointe sur l'état d'AVANT
+                    // l'approbation — c'est là qu'on retourne au relâchement
+                    // (l'approbation sera résolue par notre APPROVED). Sinon
+                    // retour vers SHOWING_REQUEST déjà résolu -> écran figé
+                    // puis boucle de timeout/CANCELLED.
+                    currentState = AppState::LISTENING;
+                    forceRedraw = true;
+                }
+                // Micro embarqué (défaut) : démarrer la capture I2S ; fallback
+                // micro PC si l'init échoue (I2S/PSRAM indisponibles).
+                voiceMicDevice = (configManager.get().micSource == MicSource::DEVICE);
+                if (voiceMicDevice && !micCaptureStart()) {
+                    voiceMicDevice = false;
+                }
+                if (voiceMicDevice) {
+                    startAudioStream();  // les chunks partent pendant la capture
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::START, voiceMode, voiceSessionId,
+                                              voiceRequestId, voiceMicDevice);
+                voiceSessionId++;
+                buttonManager.wasPressed(AppButton::A);
+            }
+        } else if (buttonATracking) {
+            buttonATracking = false;
+            if (buttonALongFired) {
+                buttonALongFired = false;
+                if (voiceMicDevice) {
+                    micCaptureStop();
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::STOP, voiceMode, voiceSessionId - 1,
+                                              voiceRequestId, voiceMicDevice);
+                if (voiceMicDevice) {
+                    finishAudioStream();
+                }
+                if (voiceMode == VoiceMode::APPROVE) {
+                    serialProtocol.sendResponse(voiceRequestId, ApprovalResponse::APPROVED);
+                    if (!configManager.get().quietMode) {
+                        buttonManager.vibrate(100, 50);
+                    }
+                    // L'action est approuvée : retour immédiat, le commentaire
+                    // s'uploade et se transcrit en arrière-plan.
+                    currentState = prevState;
+                } else if (voiceMicDevice) {
+                    // prompt + micro device : l'upload/transcription prend
+                    // quelques secondes -> écran TRANSCRIBING (sortie sur ack).
+                    currentState = AppState::TRANSCRIBING;
+                    transcribingStartTime = now;
+                } else {
+                    currentState = prevState;
+                }
+                forceRedraw = true;
+            } else {
+                if (currentState == AppState::SHOWING_REQUEST) {
+                    uint32_t requestId = serialProtocol.getRequestId();
+                    serialProtocol.sendResponse(requestId, ApprovalResponse::APPROVED);
+                    if (!configManager.get().quietMode) {
+                        buttonManager.vibrate(100, 50);
+                    }
+                    led::off();
+                    currentState = prevState;
+                    animator.reset();
+                    if (serialProtocol.hasCreditInfo()) {
+                        animator.setCreditInfo(serialProtocol.getCreditPercent(), true);
+                    }
+                    forceRedraw = true;
+                }
+            }
+        }
+
+        // Button B tracking for long-press
+        bool bEligible = (currentState == AppState::SHOWING_REQUEST);
+        // Même principe que aHolding : suivre B jusqu'au relâchement en LISTENING.
+        bool bHolding = (currentState == AppState::LISTENING && buttonBLongFired);
+
+        if ((bEligible || bHolding) && buttonManager.isHeld(AppButton::B)) {
+            if (!buttonBTracking) {
+                buttonBTracking = true;
+                buttonBHoldStart = now;
+                buttonBLongFired = false;
+            } else if (!buttonBLongFired && now - buttonBHoldStart >= LONGPRESS_MS) {
+                buttonBLongFired = true;
+                voiceMode = VoiceMode::REJECT;
+                voiceRequestId = serialProtocol.getRequestId();
+                // prevState conservé (état d'avant l'approbation), cf. approve.
+                currentState = AppState::LISTENING;
+                forceRedraw = true;
+                voiceMicDevice = (configManager.get().micSource == MicSource::DEVICE);
+                if (voiceMicDevice && !micCaptureStart()) {
+                    voiceMicDevice = false;
+                }
+                if (voiceMicDevice) {
+                    startAudioStream();  // les chunks partent pendant la capture
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::START, voiceMode, voiceSessionId,
+                                              voiceRequestId, voiceMicDevice);
+                voiceSessionId++;
+                buttonManager.wasPressed(AppButton::B);
+            }
+        } else if (buttonBTracking) {
+            buttonBTracking = false;
+            if (buttonBLongFired) {
+                buttonBLongFired = false;
+                if (voiceMicDevice) {
+                    micCaptureStop();
+                }
+                serialProtocol.sendVoiceEvent(VoiceAction::STOP, voiceMode, voiceSessionId - 1,
+                                              voiceRequestId, voiceMicDevice);
+                if (voiceMicDevice) {
+                    finishAudioStream();
+                }
+                currentState = AppState::TRANSCRIBING;
+                transcribingStartTime = now;
+                forceRedraw = true;
+            } else {
+                if (currentState == AppState::SHOWING_REQUEST) {
+                    uint32_t requestId = serialProtocol.getRequestId();
+                    serialProtocol.sendResponse(requestId, ApprovalResponse::REJECTED);
+                    if (!configManager.get().quietMode) {
+                        buttonManager.vibrate(100, 50);
+                    }
+                    led::off();
+                    currentState = prevState;
+                    animator.reset();
+                    if (serialProtocol.hasCreditInfo()) {
+                        animator.setCreditInfo(serialProtocol.getCreditPercent(), true);
+                    }
+                    forceRedraw = true;
+                }
+            }
+        }
+
+        // Button C short press in SHOWING_REQUEST = cancel
+        if (currentState == AppState::SHOWING_REQUEST && buttonManager.wasPressed(AppButton::C)) {
+            uint32_t requestId = serialProtocol.getRequestId();
+            serialProtocol.sendResponse(requestId, ApprovalResponse::CANCELLED);
+            if (!configManager.get().quietMode) {
+                buttonManager.vibrate(100, 50);
+            }
+            led::off();
+            currentState = prevState;
+            animator.reset();
+            if (serialProtocol.hasCreditInfo()) {
+                animator.setCreditInfo(serialProtocol.getCreditPercent(), true);
+            }
+            forceRedraw = true;
+        }
+    } else {
+        // Not in voice-eligible state: reset tracking
+        buttonATracking = false;
+        buttonALongFired = false;
+        buttonBTracking = false;
+        buttonBLongFired = false;
+    }
+
+    // Micro embarqué : drainer le DMA pendant l'enregistrement, et pousser
+    // l'upload chunk par chunk après le relâchement (non bloquant, quel que
+    // soit l'état courant — un commentaire d'approve s'uploade en arrière-plan).
+    if (currentState == AppState::LISTENING && voiceMicDevice) {
+        micCapturePump();
+    }
+    pumpAudioStream();
+
+    // Annonce du mode debug au PC : au boot et à chaque changement (le menu
+    // peut le toggler à tout moment). Les pings le portent aussi (reconnexion).
+    static bool debugStateAnnounced = false;
+    static bool lastAnnouncedDebug = false;
+    if (!debugStateAnnounced || configManager.get().debugMode != lastAnnouncedDebug) {
+        lastAnnouncedDebug = configManager.get().debugMode;
+        debugStateAnnounced = true;
+        bridgeSerial.printf("{\"type\":\"config\",\"debug\":%d}\n", lastAnnouncedDebug ? 1 : 0);
+    }
+
     // Handle serial communication
     if (serialProtocol.receive()) {
         lastRxMs = now;
         MessageType msgType = serialProtocol.getMessageType();
-        
-        if (msgType == MessageType::APPROVAL_REQUEST) {
-            // Approval has priority over status states
-            // If we're in CONFIG_MENU, close it properly but keep the original
-            // prevState so we return to IDLE/DONE after approval
+
+        if (msgType == MessageType::VOICE_ACK) {
+            VoiceAckState ackState = serialProtocol.getVoiceAckState();
+            if (currentState == AppState::TRANSCRIBING && ackState == VoiceAckState::DONE) {
+                currentState = prevState;
+                forceRedraw = true;
+            }
+        }
+        else if (msgType == MessageType::APPROVAL_REQUEST) {
             if (currentState == AppState::CONFIG_MENU) {
                 configMenu.close();
             } else {
                 prevState = currentState;
             }
             currentState = AppState::SHOWING_REQUEST;
-            ledFlourishDone = true; // Reset flourish flag
+            ledFlourishDone = true;
         }
         else if (msgType == MessageType::CREDIT_INFO) {
-            // Update credit info for the animator in IDLE or THINKING states
             if (currentState == AppState::IDLE || currentState == AppState::THINKING) {
-                animator.setCreditInfo(
-                    serialProtocol.getCreditPercent(),
-                    serialProtocol.hasCreditInfo()
-                );
+                animator.setCreditInfo(serialProtocol.getCreditPercent(), serialProtocol.hasCreditInfo());
             }
         }
         else if (msgType == MessageType::STATUS) {
             AgentState agentState = serialProtocol.getAgentState();
             uint32_t newSeq = serialProtocol.getStatusSeq();
-            
-            // Update watchdog tracking
+
             if (!statusInitialized || newSeq != lastStatusSeq) {
                 lastSeqChangeMs = now;
                 lastStatusSeq = newSeq;
                 statusInitialized = true;
             }
-            
-            // Update thinking activity when available
+
             if (serialProtocol.hasThinkingActivity()) {
                 currentThinkingActivity = serialProtocol.getThinkingActivity();
             }
-            
-            // Map agent state to app state (unless approval is active or the
-            // user is in the config menu — un simple heartbeat de statut ne
-            // doit pas éjecter le menu ; seuls approbation et watchdog le font)
+
             if (currentState != AppState::SHOWING_REQUEST &&
-                currentState != AppState::CONFIG_MENU) {
+                currentState != AppState::CONFIG_MENU &&
+                currentState != AppState::LISTENING &&
+                currentState != AppState::TRANSCRIBING) {
                 prevState = currentState;
-                
+
                 switch (agentState) {
                     case AgentState::THINKING:
                         currentState = AppState::THINKING;
@@ -321,7 +589,7 @@ void loop() {
                         break;
                     case AgentState::DONE:
                         currentState = AppState::DONE;
-                        ledFlourishDone = false; // Trigger flourish
+                        ledFlourishDone = false;
                         break;
                     case AgentState::ERROR:
                         currentState = AppState::ERROR_STATE;
@@ -336,15 +604,14 @@ void loop() {
             }
         }
     }
-    
-    // Watchdog checks - only when not showing approval
-    if (currentState != AppState::SHOWING_REQUEST) {
-        // DEAD check: no message received for WATCHDOG_DEAD_MS
+
+    // Watchdog checks
+    if (currentState != AppState::SHOWING_REQUEST &&
+        currentState != AppState::LISTENING &&
+        currentState != AppState::TRANSCRIBING) {
         if (statusInitialized && now - lastRxMs > WATCHDOG_DEAD_MS) {
             if (currentState != AppState::DEAD && currentState != AppState::STUCK) {
                 if (currentState == AppState::CONFIG_MENU) {
-                    // Le menu ne survit pas au watchdog ; prevState garde
-                    // l'état d'avant le menu (IDLE/DONE).
                     configMenu.close();
                 } else {
                     prevState = currentState;
@@ -353,39 +620,31 @@ void loop() {
                 triggerWatchdogAlarm(AppState::DEAD);
             }
         }
-        
-        // STUCK check: in THINKING state with no seq progression for WATCHDOG_STUCK_MS
-        if (currentState == AppState::THINKING && 
-            statusInitialized && 
+
+        if (currentState == AppState::THINKING &&
+            statusInitialized &&
             now - lastSeqChangeMs > WATCHDOG_STUCK_MS) {
             prevState = currentState;
             currentState = AppState::STUCK;
             triggerWatchdogAlarm(AppState::STUCK);
         }
     }
-    
-    // Redraw the LCD only on state transitions. Per-frame full-screen redraws
-    // (fillScreen / banners / sprite push over SPI) were saturating the bus and
-    // making the LED animations stutter. The LEDs are refreshed every frame;
-    // the screen only when the state actually changes.
+
+    // Redraw the LCD only on state transitions
     static AppState renderedState = AppState::SHOWING_REQUEST;
     bool justEntered = (currentState != renderedState) || forceRedraw;
     if (forceRedraw) forceRedraw = false;
     AppState prevRendered = renderedState;
     renderedState = currentState;
 
-    // Le sprite du chat ne fait que 240 px de large (centré, x40..280). En quittant
-    // un état PLEIN ÉCRAN (welcome / dead / stuck / error / approbation) vers un état
-    // "chat", des résidus resteraient sur les bords x0..40 et x280..320. On repeint
-    // donc tout le fond rainbow Mistral plein écran (animator.reset() = fillRect 320
-    // large sur les 5 bandes), le chat se redessine par-dessus le centre.
     auto isFullScreen = [](AppState s) {
         return s == AppState::WELCOME || s == AppState::DEAD || s == AppState::STUCK
             || s == AppState::ERROR_STATE || s == AppState::SHOWING_REQUEST
-            || s == AppState::CONFIG_MENU;
+            || s == AppState::CONFIG_MENU || s == AppState::LISTENING
+            || s == AppState::TRANSCRIBING || s == AppState::DEMO_MODE;
     };
     if (justEntered && isFullScreen(prevRendered) && !isFullScreen(currentState)) {
-        animator.reset();   // repeint le rainbow plein écran (320x240)
+        animator.reset();
     }
 
     // State machine
@@ -395,13 +654,20 @@ void loop() {
                 drawWelcomeScreen();
             }
             led::welcome();
-
-            // Ping périodique : WELCOME est l'état « device allumé, en attente de
-            // session » — c'est exactement quand le PC sonde le port (auto-détect,
-            // doctor, setup). Sans ça, le device serait indétectable au boot.
             if (::millis() - lastPingTime > 5000) {
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\"}\n", FW_VERSION);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0);
                 lastPingTime = ::millis();
+            }
+            // Mode démo : bascule auto après 10 s en welcome sans session PC.
+            {
+                static uint32_t welcomeEntryTime = 0;
+                if (justEntered) welcomeEntryTime = now;
+                if (configManager.get().demoMode && now - welcomeEntryTime > 10000) {
+                    prevState = currentState;
+                    currentState = AppState::DEMO_MODE;
+                    forceRedraw = true;
+                }
             }
             break;
         }
@@ -409,51 +675,48 @@ void loop() {
         case AppState::IDLE: {
             drawCatBanner(now, justEntered);
             led::idle();
-
-            // Send periodic ping
             if (::millis() - lastPingTime > 5000) {
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\"}\n", FW_VERSION);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0);
                 lastPingTime = ::millis();
             }
             break;
         }
-        
+
         case AppState::THINKING: {
-            // Chat throttlé + bandeau (le bandeau suit l'activité de thinking).
             drawCatBanner(now, justEntered);
             led::setAgentState(AgentState::THINKING, false, currentThinkingActivity);
             break;
         }
-        
+
         case AppState::WAITING_INPUT: {
             drawCatBanner(now, justEntered);
             led::setAgentState(AgentState::WAITING);
             break;
         }
-        
+
         case AppState::DONE: {
             drawCatBanner(now, justEntered);
-            // LED flourish une seule fois, puis vert fixe.
             if (!ledFlourishDone) {
-                led::setAgentState(AgentState::DONE, true);  // flourish
+                led::setAgentState(AgentState::DONE, true);
                 ledFlourishDone = true;
             } else {
-                led::setAgentState(AgentState::DONE, false); // steady
+                led::setAgentState(AgentState::DONE, false);
             }
             break;
         }
-        
+
         case AppState::ERROR_STATE: {
-            led::setAgentState(AgentState::ERROR);   // scanner rouge, chaque frame
+            led::setAgentState(AgentState::ERROR);
             if (justEntered) {
                 M5.Lcd.fillScreen(BLACK);
-                drawStatusBanner();                  // "detail" ou "Error" en rouge
+                drawStatusBanner();
             }
             break;
         }
 
         case AppState::DEAD: {
-            led::setAgentState(AgentState::DEAD);    // scanner rouge, chaque frame
+            led::setAgentState(AgentState::DEAD);
             if (justEntered) {
                 M5.Lcd.fillScreen(BLACK);
                 M5.Lcd.setTextFont(2);
@@ -469,7 +732,7 @@ void loop() {
         }
 
         case AppState::STUCK: {
-            led::setAgentState(AgentState::STUCK);   // scanner rouge, chaque frame
+            led::setAgentState(AgentState::STUCK);
             if (justEntered) {
                 M5.Lcd.fillScreen(BLACK);
                 M5.Lcd.setTextFont(2);
@@ -483,18 +746,92 @@ void loop() {
             }
             break;
         }
-        
+
+        case AppState::DEMO_MODE: {
+            // Vitrine autonome (sans PC) : chat animé (ou Chaton Fat) + cycle
+            // de toutes les animations LED. AUCUN redraw plein écran par frame
+            // (le fillRect à 60 fps de la v1 saturait le SPI, cf. garde-fou).
+            static uint32_t demoStartTime = 0;
+            static uint32_t lastDemoDraw = 0;
+
+            bool redrew = false;
+            if (justEntered) {
+                demoStartTime = now;
+                animator.reset();   // fond rainbow plein écran
+                redrew = true;
+            }
+
+            if (configManager.get().model == DeviceModel::CHATON_FAT) {
+                if (justEntered) {
+                    drawChatonFat(56, 34, 4, BLACK, WHITE);
+                }
+            } else if (justEntered || now - lastDemoDraw > 120) {
+                lastDemoDraw = now;
+                animator.update();
+                animator.draw();
+                redrew = true;
+            }
+
+            // Cycle des animations LED : 4 s par état, toute la vitrine y passe.
+            uint32_t phase = ((now - demoStartTime) / 4000) % 7;
+
+            // Bandeau : nom (et couleur) de l'état illustré par les LED.
+            // Repeint quand le sprite a écrasé la bande du bas OU au
+            // changement de phase (nécessaire pour le Chaton Fat, statique).
+            static uint32_t lastPhase = 99;
+            if (justEntered) lastPhase = 99;
+            if (redrew || phase != lastPhase) {
+                lastPhase = phase;
+                static const char* PHASE_LABELS[7] = {
+                    "Welcome", "Thinking...", "Running...", "Reading...",
+                    "Writing...", "Waiting for you...", "Ready"
+                };
+                static const uint16_t PHASE_COLORS[7] = {
+                    WHITE, CYAN, CYAN, CYAN, CYAN, 0xFDE0, GREEN
+                };
+                M5.Lcd.fillRect(0, 220, 320, 20, BLACK);
+                M5.Lcd.setTextFont(2);
+                M5.Lcd.setTextSize(1);
+                M5.Lcd.setTextColor(0xFDE0, BLACK);
+                M5.Lcd.setCursor(10, 221);
+                M5.Lcd.print("DEMO");
+                M5.Lcd.setTextColor(PHASE_COLORS[phase], BLACK);
+                M5.Lcd.setCursor(60, 221);
+                M5.Lcd.print(PHASE_LABELS[phase]);
+                M5.Lcd.setTextColor(0x8888, BLACK);
+                M5.Lcd.setCursor(240, 221);
+                M5.Lcd.print("btn = exit");
+            }
+
+            switch (phase) {
+                case 0: led::welcome(); break;
+                case 1: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::REASONING); break;
+                case 2: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::TOOL_EXEC); break;
+                case 3: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::READING); break;
+                case 4: led::setAgentState(AgentState::THINKING, false, ThinkingActivity::STREAMING); break;
+                case 5: led::setAgentState(AgentState::WAITING); break;
+                case 6: led::setAgentState(AgentState::DONE, false); break;
+            }
+
+            // Sortie : n'importe quel bouton -> retour welcome (le device
+            // reste détectable : pings). La v1 sortait par C long mais
+            // réutilisait buttonCTracking, remis à zéro chaque frame par le
+            // tracker du menu -> sortie impossible.
+            if (buttonManager.wasPressed(AppButton::A) ||
+                buttonManager.wasPressed(AppButton::B) ||
+                buttonManager.wasPressed(AppButton::C)) {
+                currentState = AppState::WELCOME;
+                forceRedraw = true;
+            }
+            break;
+        }
         case AppState::CONFIG_MENU: {
-            // L'appui long qui a ouvert le menu a laissé des traces : le front
-            // wasPressed(C) latché au début de l'appui, et C encore enfoncé.
-            // Sans purge, la 1re frame naviguerait (front) et la 2e fermerait
-            // le menu (niveau) — menu inutilisable.
             static bool menuWaitCRelease = false;
             static uint32_t menuCHoldStart = 0;
             static bool menuCTracking = false;
 
             if (justEntered) {
-                buttonManager.wasPressed(AppButton::A);  // purge des fronts latchés
+                buttonManager.wasPressed(AppButton::A);
                 buttonManager.wasPressed(AppButton::B);
                 buttonManager.wasPressed(AppButton::C);
                 menuWaitCRelease = buttonManager.isHeld(AppButton::C);
@@ -505,8 +842,6 @@ void loop() {
             }
 
             if (menuWaitCRelease) {
-                // Attendre le relâchement de C avant de traiter la navigation ;
-                // consommer les fronts qui arriveraient pendant l'attente.
                 buttonManager.wasPressed(AppButton::A);
                 buttonManager.wasPressed(AppButton::B);
                 buttonManager.wasPressed(AppButton::C);
@@ -514,7 +849,6 @@ void loop() {
                     menuWaitCRelease = false;
                 }
             } else {
-                // Sortie par appui long C : vrai timer 1 s, pas le niveau brut.
                 bool cLongExit = false;
                 if (buttonManager.isHeld(AppButton::C)) {
                     if (!menuCTracking) {
@@ -523,7 +857,7 @@ void loop() {
                     } else if (now - menuCHoldStart >= 1000) {
                         cLongExit = true;
                         menuCTracking = false;
-                        menuWaitCRelease = true; // pas de re-déclenchement tant que C est enfoncé
+                        menuWaitCRelease = true;
                     }
                 } else {
                     menuCTracking = false;
@@ -534,14 +868,11 @@ void loop() {
                 bool btnCPressed = buttonManager.wasPressed(AppButton::C);
 
                 if (!configMenu.update(btnAPressed, btnBPressed, btnCPressed, cLongExit)) {
-                    // Menu closed, return to previous state
                     currentState = prevState;
                     forceRedraw = true;
                 }
             }
 
-            // Apply LED brightness only when it actually changed: setBrightness()
-            // fait un FastLED.show(), inutile de le marteler à 60 fps.
             static uint8_t appliedBrightness = 0;
             uint8_t brightness = configManager.get().ledBrightness;
             if (brightness != appliedBrightness) {
@@ -549,53 +880,72 @@ void loop() {
                 appliedBrightness = brightness;
             }
 
-            led::idle();  // Keep a subtle LED animation in config menu
+            led::idle();
             break;
         }
-        
+
         case AppState::SHOWING_REQUEST: {
             const char* title = serialProtocol.getRequestTitle();
             const char* body = serialProtocol.getRequestBody();
             uint32_t requestId = serialProtocol.getRequestId();
-            
-            // Show request and wait for response
-            bool gotResponse = approvalScreen.showRequest(title, body, requestId);
-            
-            // Send response back
-            if (gotResponse) {
-                int response = approvalScreen.getResponse();
-                ApprovalResponse approxResponse;
-                
-                switch (response) {
-                    case 1: approxResponse = ApprovalResponse::APPROVED; break;
-                    case 2: approxResponse = ApprovalResponse::REJECTED; break;
-                    default: approxResponse = ApprovalResponse::CANCELLED; break;
-                }
-                
-                serialProtocol.sendResponse(requestId, approxResponse);
-                if (!configManager.get().quietMode) {
-                    buttonManager.vibrate(100, 50); // Short vibration feedback
-                }
-            } else {
-                // Timeout - send cancelled
+
+            bool timeout = approvalScreen.showRequest(title, body, requestId, 50000);
+
+            if (timeout) {
                 serialProtocol.sendResponse(requestId, ApprovalResponse::CANCELLED);
+                led::off();
+                // Garde-fou anti-boucle : si prevState pointe (encore) sur
+                // SHOWING_REQUEST, retomber sur DONE plutôt que de re-entrer
+                // ici à chaque frame (spam CANCELLED + reset plein écran).
+                currentState = (prevState == AppState::SHOWING_REQUEST)
+                    ? AppState::DONE : prevState;
+                animator.reset();
+                if (serialProtocol.hasCreditInfo()) {
+                    animator.setCreditInfo(serialProtocol.getCreditPercent(), true);
+                }
+                forceRedraw = true;
             }
-            
-            led::off();
-            // Return to previous state
-            currentState = prevState;
-            animator.reset();
-            // Re-set credit info
-            if (serialProtocol.hasCreditInfo()) {
-                animator.setCreditInfo(
-                    serialProtocol.getCreditPercent(),
-                    true
-                );
+
+            led::updateApprovalAnimation();
+            break;
+        }
+
+        case AppState::LISTENING: {
+            if (justEntered) {
+                M5.Lcd.fillScreen(BLACK);
+                M5.Lcd.setTextFont(2);
+                M5.Lcd.setTextSize(2);
+                M5.Lcd.setTextColor(CYAN, BLACK);
+                M5.Lcd.setCursor(10, 80);
+                M5.Lcd.print("Listening...");
+                M5.Lcd.setTextSize(1);
+                M5.Lcd.setCursor(10, 120);
+                M5.Lcd.print("Release to send");
+            }
+
+            led::listening();
+            break;
+        }
+
+        case AppState::TRANSCRIBING: {
+            if (justEntered) {
+                M5.Lcd.fillScreen(BLACK);
+                M5.Lcd.setTextFont(2);
+                M5.Lcd.setTextSize(2);
+                M5.Lcd.setTextColor(CYAN, BLACK);
+                M5.Lcd.setCursor(10, 100);
+                M5.Lcd.print("Transcribing...");
+            }
+
+            led::listening();
+
+            if (now - transcribingStartTime > TRANSCRIBING_TIMEOUT_MS) {
+                currentState = prevState;
+                forceRedraw = true;
             }
             break;
         }
     }
     
-    ::delay(16); // ~60fps
+    ::delay(16);
 }
-

@@ -1,113 +1,61 @@
-// Vibe M5Stack - M5Stack integration for Mistral Vibe CLI
-// Copyright 2026 Romain Delfosse
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 #pragma once
 #include <cstdint>
 #include <ArduinoJson.h>
 
-// Agent states (for STATUS messages)
-enum class AgentState {
-    THINKING,      // Agent is generating/executing
-    WAITING,       // Waiting for user input/approval
-    DONE,          // Agent finished its turn
-    ERROR,         // Exception occurred
-    DEAD,          // Agent dead (watchdog timeout)
-    STUCK          // Agent stuck (generating forever)
-};
+enum class AgentState { THINKING, WAITING, DONE, ERROR, DEAD, STUCK };
 
-// Thinking activities (sub-states of THINKING)
-enum class ThinkingActivity {
-    REASONING,     // Model is reasoning, no active tool
-    TOOL_EXEC,     // Tool execution in progress (bash, write, edit, etc.)
-    READING,       // Reading/searching data (read, grep, fetch, etc.)
-    STREAMING      // Model response being streamed
-};
+enum class ThinkingActivity { REASONING, TOOL_EXEC, READING, STREAMING };
 
-// Message types
+enum class VoiceAction { START, STOP };
+
+enum class VoiceMode { PROMPT, APPROVE, REJECT };
+
+enum class VoiceAckState { TRANSCRIBING, DONE };
+
 enum class MessageType {
-    INVALID,
-    APPROVAL_REQUEST,  // PC -> M5Stack: Show approval request
-    APPROVAL_RESPONSE, // M5Stack -> PC: User response
-    PING,              // Keepalive
-    ACK,               // Acknowledgement
-    CREDIT_INFO,       // PC -> M5Stack: Credit usage percentage (0-100)
-    STATUS            // PC -> M5Stack: Agent state + heartbeat
+    INVALID, APPROVAL_REQUEST, APPROVAL_RESPONSE, PING, ACK,
+    CREDIT_INFO, STATUS, VOICE, VOICE_ACK
 };
 
-// Watchdog constants (milliseconds)
-#define WATCHDOG_DEAD_MS   12000   // No message received -> DEAD
-#define WATCHDOG_STUCK_MS  90000   // No seq progression in THINKING -> STUCK
-#define HEARTBEAT_MS       3000    // PC heartbeat interval
+#define WATCHDOG_DEAD_MS   12000
+#define WATCHDOG_STUCK_MS  90000
+#define HEARTBEAT_MS       3000
 
-// Approval response values
-enum class ApprovalResponse {
-    NONE,
-    APPROVED,
-    REJECTED,
-    CANCELLED
-};
+enum class ApprovalResponse { NONE, APPROVED, REJECTED, CANCELLED };
 
-// Max JSON document sizes
-#define JSON_RX_SIZE 512   // Max size for incoming JSON
-#define JSON_TX_SIZE 256   // Max size for outgoing JSON
+#define JSON_RX_SIZE 512
+#define JSON_TX_SIZE 256
 
 class SerialProtocol {
 public:
     SerialProtocol();
-    
-    // Initialize serial communication
     void begin(uint32_t baud = 115200);
-    
-    // Check if data is available and parse it
-    // Returns true if a valid message was received
     bool receive();
-    
-    // Send an approval response
     void sendResponse(uint32_t requestId, ApprovalResponse response);
-    
-    // Send a simple ACK
     void sendAck(uint32_t requestId);
-    
-    // Get last received message type
+    // micDevice : true = l'audio sera capturé sur le device et uploadé
+    // (messages "audio"/"audio_end"), false = le PC enregistre avec son micro.
+    void sendVoiceEvent(VoiceAction action, VoiceMode mode, uint32_t sessionId,
+                        uint32_t requestId, bool micDevice = false);
+    void sendVoiceAck(VoiceAckState state, const char* text = nullptr);
     MessageType getMessageType() const;
-    
-    // Get approval request data
     const char* getRequestTitle() const;
     const char* getRequestBody() const;
     uint32_t getRequestId() const;
-    
-    // Check if new message available
     bool hasMessage() const;
-    
-    // Get credit info
     uint8_t getCreditPercent() const;
     bool hasCreditInfo() const;
-    
-    // Get status info
     AgentState getAgentState() const;
     const char* getStatusDetail() const;
     uint32_t getStatusSeq() const;
     bool hasStatus() const;
-
-    // Get thinking activity info
     ThinkingActivity getThinkingActivity() const;
     bool hasThinkingActivity() const;
-    
+    VoiceAckState getVoiceAckState() const;
+    const char* getVoiceAckText() const;
 private:
     StaticJsonDocument<JSON_RX_SIZE> rxDoc;
     StaticJsonDocument<JSON_TX_SIZE> txDoc;
-    
     MessageType lastMessageType;
     uint32_t lastRequestId;
     char lastTitle[128];
@@ -115,14 +63,13 @@ private:
     uint8_t lastCreditPercent;
     bool creditInfoValid;
     bool newMessageAvailable;
-    
-    // Status fields
     AgentState lastAgentState;
-    char lastStatusDetail[41];  // max 40 chars + null terminator
+    char lastStatusDetail[41];
     uint32_t lastStatusSeq;
     bool statusValid;
-
-    // Thinking activity field
     ThinkingActivity lastThinkingActivity;
     bool thinkingActivityValid;
+    VoiceAckState lastVoiceAckState;
+    char lastVoiceAckText[61];
+    bool voiceAckValid;
 };

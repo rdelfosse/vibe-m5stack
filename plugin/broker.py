@@ -339,10 +339,12 @@ class OwnerBroker:
         while self.running:
             try:
                 self._send_aggregated_status()
-                time.sleep(HEARTBEAT_MS / 1000.0)
             except Exception as e:
-                logger.error(f"Heartbeat error: {e}")
-                break
+                # Lien device indisponible (reboot/BT) : on continue, le
+                # reader du bridge gère la reconnexion — un break laissait
+                # le device sans statut pour le reste de la session.
+                logger.warning(f"Heartbeat error (lien indisponible ?): {e}")
+            time.sleep(HEARTBEAT_MS / 1000.0)
     
     def request_approval(self, title: str, body: str, request_id: int = None) -> Optional[Dict[str, Any]]:
         """

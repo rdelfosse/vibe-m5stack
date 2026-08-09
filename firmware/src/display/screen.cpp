@@ -34,7 +34,7 @@ static const uint16_t RAINBOW[5] = {
 static constexpr int16_t BAND_H = SCREEN_H / 5;  // 48 px per band
 
 ApprovalScreen::ApprovalScreen()
-    : response(-1), responseRequestId(0), displayStartTime(0) {}
+    : responseRequestId(0), displayStartTime(0) {}
 
 static void drawRainbowBackground() {
     for (int i = 0; i < 5; i++) {
@@ -55,27 +55,22 @@ static void drawMistralLogo(int16_t originX, int16_t originY, uint8_t scale) {
     }
 }
 
+// Draw-only et NON BLOQUANT : dessine la frame à la première requête et gère
+// UNIQUEMENT le timeout (retour true = expiré -> l'appelant enverra CANCELLED).
+// AUCUNE lecture bouton ici : tous les gestes (A/B courts et longs, C) sont
+// gérés dans loop() via buttonManager — l'ancienne boucle bloquante gelait
+// loop() et son `return true` sur appui était interprété comme un timeout
+// (chaque approbation partait en CANCELLED/skip).
 bool ApprovalScreen::showRequest(const char* title, const char* body,
                                  uint32_t requestId, uint32_t timeoutMs) {
-    response = -1;
-    responseRequestId = requestId;
-    displayStartTime = ::millis();
-
-    drawRequestFrame(title, body);
-
-    while (::millis() - displayStartTime < timeoutMs) {
-        M5.update();
-        led::updateApprovalAnimation();
-        if (M5.BtnA.wasPressed()) { response = 1; return true; }
-        if (M5.BtnB.wasPressed()) { response = 2; return true; }
-        if (M5.BtnC.wasPressed()) { response = 0; return true; }
-        ::delay(10);
+    if (responseRequestId != requestId) {
+        responseRequestId = requestId;
+        displayStartTime = ::millis();
+        drawRequestFrame(title, body);
     }
-    response = 0;
-    return false;
+    return (::millis() - displayStartTime > timeoutMs);
 }
 
-int ApprovalScreen::getResponse() const { return response; }
 uint32_t ApprovalScreen::getResponseRequestId() const { return responseRequestId; }
 
 void ApprovalScreen::drawRequestFrame(const char* title, const char* body) {

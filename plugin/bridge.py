@@ -238,16 +238,92 @@ class M5StackBridge:
                                 # BUT: capture fw version from ping before dropping
                                 if isinstance(msg, dict) and msg.get("type") == "ping":
                                     self.firmware_version = msg.get("fw")
+                                    if "debug" in msg:
+                                        self._apply_debug_flag(msg.get("debug"))
+                                    continue
+                                # État de config poussé par le device (menu Debug)
+                                if isinstance(msg, dict) and msg.get("type") == "config":
+                                    if "debug" in msg:
+                                        self._apply_debug_flag(msg.get("debug"))
+                                    continue
+                                # Route voice/audio messages directly to voice handler
+                                if isinstance(msg, dict) and msg.get("type") in (
+                                    "voice", "audio", "audio_end"
+                                ):
+                                    self._handle_voice_message(msg)
                                     continue
                                 self.message_queue.put(msg)
                             except json.JSONDecodeError:
                                 # Not valid JSON, might be partial
                                 pass
-                    
+                
                 time.sleep(0.01)
             except Exception as e:
-                logger.error(f"Serial read error: {e}")
-                break
+                # Device rebooté / lien BT tombé : NE PAS tuer le reader (le
+                # break historique laissait la session morte jusqu'au restart).
+                # On boucle en reconnexion jusqu'au retour du device.
+                logger.warning(f"Serial link lost ({e}) - reconnexion en cours...")
+                buffer = ""
+                self._reconnect_loop()
+
+    def _reconnect_loop(self):
+        """Referme le port et le rouvre en boucle (3 s) jusqu'au retour du device.
+
+        Appelé par le reader thread quand le lien meurt (reboot du M5Stack,
+        coupure BT). send() renvoie False pendant l'indisponibilité ; au retour,
+        le heartbeat du broker repousse un statut et resynchronise le device
+        (sortie de l'écran welcome) sans redémarrer la session.
+        """
+        with self._write_lock:
+            try:
+                if self.serial_conn:
+                    self.serial_conn.close()
+            except Exception:
+                pass
+            self.serial_conn = None
+
+        while self.running:
+            time.sleep(3.0)
+            try:
+                new_conn = serial.Serial(self.port, baudrate=self.BAUD_RATE,
+                                         timeout=self.TIMEOUT)
+            except Exception:
+                continue  # le device reboote encore / BT pas rétabli
+            with self._write_lock:
+                self.serial_conn = new_conn
+            logger.info(f"M5Stack reconnecté sur {self.port}")
+            return
+    
+    def _apply_debug_flag(self, value):
+        """Synchronise le flag debug runtime avec l'état annoncé par le device."""
+        try:
+            from plugin import runtime_flags
+            enabled = bool(value)
+            if enabled != runtime_flags.debug_enabled():
+                runtime_flags.set_debug(enabled)
+                logger.info(f"Debug mode (device): {'ON' if enabled else 'OFF'}")
+            else:
+                runtime_flags.set_debug(enabled)
+        except Exception as e:
+            logger.warning(f"Could not apply debug flag: {e}")
+
+    def _handle_voice_message(self, msg):
+        """Route les messages voix/audio du device vers le voice handler."""
+        try:
+            from plugin.voice_handler import get_voice_handler
+            handler = get_voice_handler()
+            msg_type = msg.get("type")
+            if msg_type == "voice":
+                handler.handle_voice_message(msg)
+            elif msg_type == "audio":
+                handler.handle_audio_chunk(msg)
+            elif msg_type == "audio_end":
+                handler.handle_audio_end(msg)
+        except ImportError:
+            # voice_handler might not be available during testing
+            logger.debug(f"Voice message received but voice_handler not available: {msg}")
+        except Exception as e:
+            logger.error(f"Error handling voice message: {e}")
     
     def send(self, message: Dict[str, Any]) -> bool:
         """
@@ -426,6 +502,23 @@ class M5StackBridge:
             message["activity"] = activity
         return self.send(message)
     
+    def send_voice_ack(self, state: str, text: str = "") -> bool:
+        """
+        Send voice acknowledgment to M5Stack.
+        
+        Args:
+            state: "transcribing" or "done"
+            text: Transcribed text (for state="done")
+        
+        Returns:
+            True if message was sent successfully
+        """
+        message = {"type": "voice_ack", "state": state}
+        if text:
+            message["text"] = text[:100]  # Truncate to reasonable length
+        return self.send(message)
+
+
     def close(self):
         """Close the serial connection."""
         self.running = False

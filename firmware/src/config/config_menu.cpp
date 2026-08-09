@@ -91,8 +91,9 @@ void ConfigMenu::draw(bool forced) {
     M5.Lcd.setTextFont(2);
     M5.Lcd.setTextSize(1);
     
-    const int ITEM_HEIGHT = 45;
-    const int ITEM_Y_START = 60;
+    // 7 items : 40 + 7*26 = 222 < 225 (bandeau d'aide) — tient sur 240 px.
+    const int ITEM_HEIGHT = 26;
+    const int ITEM_Y_START = 40;
     const int ITEM_X = 20;
     const int SELECTOR_X = 5;
     
@@ -122,6 +123,21 @@ void ConfigMenu::draw(bool forced) {
             case ConfigMenuItem::DEVICE_MODEL: {
                 const char* modelStr = (configManager.get().model == DeviceModel::CHATON_FAT) ? "Chaton Fat" : "Mistral";
                 M5.Lcd.printf("Model: > %s\n", modelStr);
+                break;
+            }
+            case ConfigMenuItem::DEBUG_MODE: {
+                const char* debugStr = configManager.get().debugMode ? "ON" : "OFF";
+                M5.Lcd.printf("Debug: > %s\n", debugStr);
+                break;
+            }
+            case ConfigMenuItem::MIC_SOURCE: {
+                const char* micStr = (configManager.get().micSource == MicSource::PC) ? "PC" : "Device";
+                M5.Lcd.printf("Mic: > %s\n", micStr);
+                break;
+            }
+            case ConfigMenuItem::DEMO_MODE: {
+                const char* demoStr = configManager.get().demoMode ? "ON" : "OFF";
+                M5.Lcd.printf("Demo Mode: > %s\n", demoStr);
                 break;
             }
             case ConfigMenuItem::EXIT:
@@ -187,6 +203,15 @@ void ConfigMenu::selectItem() {
         case ConfigMenuItem::DEVICE_MODEL:
             cycleModel(true);
             break;
+        case ConfigMenuItem::DEBUG_MODE:
+            configManager.toggleDebugMode();
+            break;
+        case ConfigMenuItem::MIC_SOURCE:
+            configManager.toggleMicSource();
+            break;
+        case ConfigMenuItem::DEMO_MODE:
+            toggleDemoMode();
+            break;
         case ConfigMenuItem::EXIT:
             // Handled in update()
             break;
@@ -205,4 +230,8 @@ void ConfigMenu::cycleBrightness(bool forward) {
 
 void ConfigMenu::cycleModel(bool forward) {
     configManager.cycleModel(forward);
+}
+
+void ConfigMenu::toggleDemoMode() {
+    configManager.toggleDemoMode();
 }
