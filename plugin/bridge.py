@@ -259,8 +259,40 @@ class M5StackBridge:
                 
                 time.sleep(0.01)
             except Exception as e:
-                logger.error(f"Serial read error: {e}")
-                break
+                # Device rebooté / lien BT tombé : NE PAS tuer le reader (le
+                # break historique laissait la session morte jusqu'au restart).
+                # On boucle en reconnexion jusqu'au retour du device.
+                logger.warning(f"Serial link lost ({e}) - reconnexion en cours...")
+                buffer = ""
+                self._reconnect_loop()
+
+    def _reconnect_loop(self):
+        """Referme le port et le rouvre en boucle (3 s) jusqu'au retour du device.
+
+        Appelé par le reader thread quand le lien meurt (reboot du M5Stack,
+        coupure BT). send() renvoie False pendant l'indisponibilité ; au retour,
+        le heartbeat du broker repousse un statut et resynchronise le device
+        (sortie de l'écran welcome) sans redémarrer la session.
+        """
+        with self._write_lock:
+            try:
+                if self.serial_conn:
+                    self.serial_conn.close()
+            except Exception:
+                pass
+            self.serial_conn = None
+
+        while self.running:
+            time.sleep(3.0)
+            try:
+                new_conn = serial.Serial(self.port, baudrate=self.BAUD_RATE,
+                                         timeout=self.TIMEOUT)
+            except Exception:
+                continue  # le device reboote encore / BT pas rétabli
+            with self._write_lock:
+                self.serial_conn = new_conn
+            logger.info(f"M5Stack reconnecté sur {self.port}")
+            return
     
     def _apply_debug_flag(self, value):
         """Synchronise le flag debug runtime avec l'état annoncé par le device."""
