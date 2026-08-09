@@ -24,7 +24,8 @@ enum class MessageType {
 
 enum class ApprovalResponse { NONE, APPROVED, REJECTED, CANCELLED };
 
-#define JSON_RX_SIZE 512
+// 4 Ko : doit contenir un chunk tts_audio (~1,4 Ko de base64) + les clés.
+#define JSON_RX_SIZE 4096
 #define JSON_TX_SIZE 256
 
 class SerialProtocol {

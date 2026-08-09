@@ -35,7 +35,8 @@
 //   {"type":"tts_stop"}          // annule la lecture en cours
 
 constexpr uint32_t SPEAKER_SAMPLE_RATE = 16000;
-constexpr size_t   SPEAKER_BUFFER_SIZE = SPEAKER_SAMPLE_RATE * 10 / 8; // 10 s de µ-law (1 o/éch.)
+// µ-law = 1 octet/échantillon : 10 s à 16 kHz = 160 Ko (le /8 donnait 1,25 s).
+constexpr size_t   SPEAKER_BUFFER_SIZE = SPEAKER_SAMPLE_RATE * 10;
 
 // Démarre la lecture. false si I2S/PSRAM indisponible ou déjà en lecture.
 bool speakerPlayStart();

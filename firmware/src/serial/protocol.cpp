@@ -18,7 +18,9 @@ SerialProtocol::SerialProtocol()
 void SerialProtocol::begin(uint32_t baud) { bridgeSerialBegin(baud); }
 
 bool SerialProtocol::receive() {
-    static char lineBuf[512]; static size_t lineLen = 0;
+    // 2 Ko : les messages tts_audio (1 Ko µ-law -> ~1,4 Ko base64 + JSON)
+    // ne tiennent pas dans 512 — ils étaient silencieusement jetés.
+    static char lineBuf[2048]; static size_t lineLen = 0;
     bool haveLine = false;
     while (bridgeSerial.available()) {
         char c = (char)bridgeSerial.read();

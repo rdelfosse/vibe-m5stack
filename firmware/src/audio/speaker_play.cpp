@@ -34,6 +34,7 @@ static size_t s_writePos = 0;
 static size_t s_readPos = 0;
 static bool s_active = false;
 static bool s_stopRequested = false;
+static TaskHandle_t s_i2sTaskHandle = nullptr;
 
 // Sémaphore pour synchroniser l'écriture (depuis le thread réseau/loop)
 // et la lecture (depuis le callback I2S).
@@ -61,46 +62,52 @@ static int16_t ulaw2linear(uint8_t ulaw) {
 }
 
 // Tâche de lecture I2S : lit du buffer circulaire et envoie à I2S DAC.
-static void IRAM_ATTR i2sWriterTask(void* arg) {
+// TOUT le teardown du driver appartient à cette tâche (jamais à stop() —
+// désinstaller pendant qu'un i2s_write est en cours = LoadProhibited/reboot).
+static void i2sWriterTask(void* arg) {
     (void)arg;
-    static int16_t pcmBuffer[128];  // 128 échantillons = 256 octets
-    
+    constexpr size_t PCM_SAMPLES = 128;
+    static uint16_t pcmBuffer[PCM_SAMPLES];  // non signé : format du DAC intégré
+
     while (s_active) {
-        // Lire jusqu'à 128 échantillons µ-law du buffer circulaire
-        size_t available = (s_writePos >= s_readPos) ? (s_writePos - s_readPos) : (s_bufferSize - s_readPos + s_writePos);
-        size_t toRead = (available > sizeof(pcmBuffer)) ? sizeof(pcmBuffer) : available;
-        
+        size_t available = (s_writePos >= s_readPos) ? (s_writePos - s_readPos)
+                                                     : (s_bufferSize - s_readPos + s_writePos);
+        // ⚠️ Compte d'ÉCHANTILLONS (la v1 bornait à sizeof() = 2x trop ->
+        // écrasement de pile de la tâche -> panic/reboot).
+        size_t toRead = (available > PCM_SAMPLES) ? PCM_SAMPLES : available;
+
         if (toRead == 0) {
-            // Pas de données : envoyer des zéros (silence) pour éviter des pops
+            // Pas de données : silence (mi-échelle DAC) pour éviter les pops.
+            for (size_t i = 0; i < PCM_SAMPLES; i++) pcmBuffer[i] = 0x8000;
             size_t written = 0;
-            i2s_write(SPEAKER_I2S_PORT, pcmBuffer, sizeof(pcmBuffer), &written, portMAX_DELAY);
+            i2s_write(SPEAKER_I2S_PORT, pcmBuffer, sizeof(pcmBuffer), &written,
+                      20 / portTICK_PERIOD_MS);
             continue;
         }
-        
-        // Décoder µ-law -> PCM16
+
+        // µ-law -> PCM16 signé -> non signé (le DAC intégré lit les 8 bits
+        // hauts d'un échantillon non signé ; du signé brut = distorsion).
         for (size_t i = 0; i < toRead; i++) {
-            uint8_t ulaw = s_buffer[s_readPos];
-            pcmBuffer[i] = ulaw2linear(ulaw);
+            int16_t s = ulaw2linear(s_buffer[s_readPos]);
+            pcmBuffer[i] = (uint16_t)(s + 32768);
             s_readPos = (s_readPos + 1) % s_bufferSize;
         }
-        
-        // Écrire au port I2S
+
         size_t written = 0;
-        esp_err_t err = i2s_write(SPEAKER_I2S_PORT, pcmBuffer, toRead * sizeof(int16_t), &written, portMAX_DELAY);
-        
+        esp_err_t err = i2s_write(SPEAKER_I2S_PORT, pcmBuffer,
+                                  toRead * sizeof(uint16_t), &written,
+                                  100 / portTICK_PERIOD_MS);
         if (err != ESP_OK) {
-            // Erreur I2S (driver désinstallé) : quitter la boucle
             break;
         }
     }
-    
-    // Nettoyage : désinstaller le driver au cas où
+
+    // Teardown par la tâche uniquement.
     i2s_driver_uninstall(SPEAKER_I2S_PORT);
+    s_i2sTaskHandle = nullptr;   // signale à stop() que le teardown est fini
     vTaskDelete(nullptr);
 }
 
-// Tâche dédiée pour gérer le thread de lecture I2S
-static TaskHandle_t s_i2sTaskHandle = nullptr;
 
 bool speakerPlayStart() {
     if (s_active) return true;  // déjà en cours
@@ -152,7 +159,7 @@ bool speakerPlayStart() {
     
     // Démarrer la tâche de lecture
     s_active = true;
-    xTaskCreatePinnedToCore(i2sWriterTask, "i2sWriter", 2048, nullptr, 10, &s_i2sTaskHandle, APP_CPU_NUM);
+    xTaskCreatePinnedToCore(i2sWriterTask, "i2sWriter", 4096, nullptr, 10, &s_i2sTaskHandle, APP_CPU_NUM);
     
     return true;
 }
@@ -173,13 +180,27 @@ bool speakerPlayFeed(const uint8_t* data, size_t len) {
     size_t available = (s_writePos >= s_readPos) ? (s_bufferSize - s_writePos + s_readPos) : (s_readPos - s_writePos);
     
     if (len > available) {
-        // Buffer plein : attendre ou tronquer ?
-        // Selon le brief : PACER l'envoi côté PC (~1 chunk/60ms) donc ça ne devrait pas arriver.
-        // Mais si ça arrive, on attend un peu.
+        // Buffer plein : attendre BORNÉ que la tâche draine, puis abandonner
+        // le chunk. ⚠️ La v1 se rappelait RÉCURSIVEMENT — récursion infinie
+        // et débordement de pile (reboot) dès que le producteur dépassait le
+        // consommateur.
         xSemaphoreGive(s_bufferMutex);
-        vTaskDelay(pdMS_TO_TICKS(10));
-        return speakerPlayFeed(data, len);  // réessayer
+        for (int retry = 0; retry < 20; retry++) {   // <= 200 ms
+            vTaskDelay(pdMS_TO_TICKS(10));
+            if (xSemaphoreTake(s_bufferMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+                return false;
+            }
+            available = (s_writePos >= s_readPos)
+                ? (s_bufferSize - s_writePos + s_readPos)
+                : (s_readPos - s_writePos);
+            if (len <= available) {
+                goto copy_data;   // la place s'est libérée
+            }
+            xSemaphoreGive(s_bufferMutex);
+        }
+        return false;  // chunk abandonné plutôt que device gelé/crashé
     }
+copy_data:
     
     // Copier les données
     if (s_writePos + len <= s_bufferSize) {
@@ -205,18 +226,17 @@ bool speakerPlayFeed(const uint8_t* data, size_t len) {
 
 void speakerPlayStop() {
     if (!s_active) return;
-    
+
     s_stopRequested = true;
     s_active = false;
-    
-    // Ne PAS attendre vTaskDelete ici (bloquerait loop()).
-    // La tâche se terminera d'elle-même quand elle détecte s_active=false.
-    // On désinstalle le driver I2S immédiatement pour libérer la ressource.
-    i2s_driver_uninstall(SPEAKER_I2S_PORT);
-    
-    // Réinitialiser la tâche handle
-    s_i2sTaskHandle = nullptr;
-    
+
+    // Attendre (borné) que LA TÂCHE fasse le teardown : désinstaller le
+    // driver ici pendant qu'un i2s_write est en vol = LoadProhibited/reboot.
+    // La tâche sort en <= ~120 ms (timeouts des i2s_write).
+    for (int i = 0; i < 50 && s_i2sTaskHandle != nullptr; i++) {
+        vTaskDelay(10 / portTICK_PERIOD_MS);
+    }
+
     s_writePos = 0;
     s_readPos = 0;
     s_stopRequested = false;
