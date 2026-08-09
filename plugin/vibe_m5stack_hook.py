@@ -85,6 +85,10 @@ _asyncio_loop = None
 # Resolver de l'approbation en cours (armé par wrapped(), désarmé en finally).
 # Permet au reject vocal de résoudre l'approbation pendante en (NO, consigne).
 _active_approval_resolver = None
+# Instance TextualUI, capturée quand la TUI enregistre son approval callback
+# (au démarrage de session) : sert à soumettre les prompts vocaux comme de
+# vrais messages utilisateur.
+_tui_instance = None
 
 # Tool classification for thinking activity
 READING_TOOLS = {"read_file", "read", "grep", "search", "glob", "ls",
@@ -486,8 +490,11 @@ def patch_agent_loop():
     
     def patched_set_approval_callback(self, callback):
         """Wrap the original callback to race against M5Stack."""
+        global _tui_instance
         original_cb = callback  # bound method -> TextualUI._approval_callback
         tui_instance = getattr(callback, "__self__", None)  # TextualUI instance or None
+        if tui_instance is not None:
+            _tui_instance = tui_instance
 
         async def wrapped(tool, args, tool_call_id, required_permissions):
             global _active_approval_resolver
@@ -584,12 +591,34 @@ def install_hook():
         from plugin.voice_handler import get_voice_handler
         handler = get_voice_handler()
 
+        async def _submit_voice_text(tui, text: str):
+            # Même chemin que la saisie clavier : démarre un tour si la TUI est
+            # libre, sinon met en file comme un message utilisateur en attente.
+            if tui._is_busy():
+                await tui._handle_queue_submit(text, reject_hint="voice input rejected")
+            else:
+                await tui._handle_user_message(text)
+
         def inject_callback(text: str):
+            # Chemin préféré : soumettre à la TUI comme un vrai message
+            # (visible à l'écran, démarre un tour). inject_user_context seul
+            # n'alimente que le contexte du prochain tour sans le démarrer.
+            tui = _tui_instance
+            if tui is not None:
+                try:
+                    tui.call_from_thread(_submit_voice_text, tui, text)
+                    logger.info(f"Voice prompt soumis à la TUI: {text[:60]}")
+                    return
+                except Exception:
+                    logger.exception("TUI submit failed - fallback inject_user_context")
             if _agent_loop is not None and _asyncio_loop is not None:
                 asyncio.run_coroutine_threadsafe(
                     _agent_loop.inject_user_context(text),
                     _asyncio_loop
                 )
+                logger.info("Voice text injecté au contexte (pas de TUI capturée)")
+            else:
+                logger.error("Voice text PERDU: ni TUI ni agent_loop disponibles")
         handler.set_inject_callback(inject_callback)
 
         def resolve_approval_callback(request_id: int, approved: bool, text: str):
