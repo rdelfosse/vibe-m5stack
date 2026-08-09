@@ -151,12 +151,18 @@ class VoiceInput:
         if not self._has_mistralai:
             return ""
         try:
-            import mistralai
+            try:
+                from mistralai.client import Mistral  # SDK >= 2.x (top-level vide)
+            except ImportError:
+                from mistralai import Mistral  # anciens SDK
             api_key = self._get_api_key()
             if not api_key:
                 return ""
-            client = mistralai.Mistral(api_key=api_key)
-            response = client.audio.transcriptions.create(
+            client = Mistral(api_key=api_key)
+            # SDK 2.x : la méthode batch s'appelle complete() (create() avant).
+            transcriptions = client.audio.transcriptions
+            method = getattr(transcriptions, "complete", None) or transcriptions.create
+            response = method(
                 model=VOXTRAL_MODEL,
                 file={"file_name": "ptt.wav", "content": wav_data},
                 language="fr",

@@ -25,6 +25,7 @@ static const char* NVS_KEY_MAGIC = "magic";
 static const char* NVS_KEY_QUIET = "quiet";
 static const char* NVS_KEY_BRIGHT = "bright";
 static const char* NVS_KEY_MODEL = "model";
+static const char* NVS_KEY_DEBUG = "debug";
 
 // Magic byte value to detect valid configuration
 static const uint8_t CONFIG_MAGIC = 0x42;
@@ -132,6 +133,13 @@ void ConfigManager::toggleQuietMode() {
     }
 }
 
+void ConfigManager::toggleDebugMode() {
+    currentConfig.debugMode = !currentConfig.debugMode;
+    if (initialized) {
+        save();
+    }
+}
+
 bool ConfigManager::load() {
     Preferences preferences;
     
@@ -148,6 +156,7 @@ bool ConfigManager::load() {
     
     // Load configuration
     currentConfig.quietMode = preferences.getBool(NVS_KEY_QUIET, false);
+    currentConfig.debugMode = preferences.getBool(NVS_KEY_DEBUG, false);
     
     uint8_t brightness = preferences.getUChar(NVS_KEY_BRIGHT, 32);
     // Validate brightness is in our list
@@ -181,6 +190,7 @@ bool ConfigManager::save() {
     
     // Save configuration
     preferences.putBool(NVS_KEY_QUIET, currentConfig.quietMode);
+    preferences.putBool(NVS_KEY_DEBUG, currentConfig.debugMode);
     preferences.putUChar(NVS_KEY_BRIGHT, currentConfig.ledBrightness);
     preferences.putUChar(NVS_KEY_MODEL, static_cast<uint8_t>(currentConfig.model));
     
@@ -190,6 +200,7 @@ bool ConfigManager::save() {
 
 void ConfigManager::applyDefaults() {
     currentConfig.quietMode = false;
+    currentConfig.debugMode = false;   // debug OFF par défaut (logs sobres)
     currentConfig.ledBrightness = 32;
     currentConfig.model = DeviceModel::MISTRAL;
 }

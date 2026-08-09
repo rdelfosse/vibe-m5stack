@@ -91,8 +91,9 @@ void ConfigMenu::draw(bool forced) {
     M5.Lcd.setTextFont(2);
     M5.Lcd.setTextSize(1);
     
-    const int ITEM_HEIGHT = 45;
-    const int ITEM_Y_START = 60;
+    // 5 items : 48 + 5*34 = 218 < 225 (bandeau d'aide) — tient sur 240 px.
+    const int ITEM_HEIGHT = 34;
+    const int ITEM_Y_START = 48;
     const int ITEM_X = 20;
     const int SELECTOR_X = 5;
     
@@ -122,6 +123,11 @@ void ConfigMenu::draw(bool forced) {
             case ConfigMenuItem::DEVICE_MODEL: {
                 const char* modelStr = (configManager.get().model == DeviceModel::CHATON_FAT) ? "Chaton Fat" : "Mistral";
                 M5.Lcd.printf("Model: > %s\n", modelStr);
+                break;
+            }
+            case ConfigMenuItem::DEBUG_MODE: {
+                const char* debugStr = configManager.get().debugMode ? "ON" : "OFF";
+                M5.Lcd.printf("Debug: > %s\n", debugStr);
                 break;
             }
             case ConfigMenuItem::EXIT:
@@ -186,6 +192,9 @@ void ConfigMenu::selectItem() {
             break;
         case ConfigMenuItem::DEVICE_MODEL:
             cycleModel(true);
+            break;
+        case ConfigMenuItem::DEBUG_MODE:
+            configManager.toggleDebugMode();
             break;
         case ConfigMenuItem::EXIT:
             // Handled in update()

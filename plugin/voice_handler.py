@@ -99,16 +99,21 @@ class VoiceHandler:
             self._resolve_reject_fallback(mode, request_id, DEFAULT_REJECT_REASON)
             return
 
-        # Debug : garder la dernière capture sur disque (écrasée à chaque PTT)
-        # pour pouvoir l'écouter en cas de transcription vide.
-        try:
-            from pathlib import Path
-            dump = Path.home() / ".vibe" / "logs" / "last_ptt.wav"
-            dump.write_bytes(wav_data)
-            duration_ms = max(0, (len(wav_data) - 44)) // 32  # 16 kHz mono 16-bit
-            logger.info(f"Audio capture: {len(wav_data)} octets (~{duration_ms} ms) -> {dump}")
-        except Exception:
-            logger.exception("Could not dump last_ptt.wav")
+        # Mode debug (item du menu config du device, OFF par défaut) : garder
+        # la dernière capture sur disque pour audit. L'audio est une donnée
+        # sensible — jamais persistée hors debug explicite.
+        from plugin import runtime_flags
+        if runtime_flags.debug_enabled():
+            try:
+                from pathlib import Path
+                dump = Path.home() / ".vibe" / "logs" / "last_ptt.wav"
+                dump.write_bytes(wav_data)
+                duration_ms = max(0, (len(wav_data) - 44)) // 32  # 16 kHz mono 16-bit
+                logger.info(
+                    f"[debug] Audio capture: {len(wav_data)} octets (~{duration_ms} ms) -> {dump}"
+                )
+            except Exception:
+                logger.exception("Could not dump last_ptt.wav")
 
         if mode not in ("prompt", "approve", "reject"):
             logger.warning(f"Unknown mode: {mode}")

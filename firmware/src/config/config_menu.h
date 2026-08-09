@@ -21,6 +21,7 @@ enum class ConfigMenuItem {
     QUIET_MODE,
     LED_BRIGHTNESS,
     DEVICE_MODEL,
+    DEBUG_MODE,
     EXIT,
     COUNT
 };

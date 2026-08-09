@@ -24,6 +24,7 @@ enum class DeviceModel {
 // Configuration structure
 struct DeviceConfig {
     bool quietMode;           // true = silent (no vibration/beep)
+    bool debugMode;           // true = le PC dump/logge les flux (audit voix)
     uint8_t ledBrightness;    // LED brightness: 16, 32, 64, 128, or 255
     DeviceModel model;        // Active model
 };
@@ -54,6 +55,9 @@ public:
     
     // Toggle quiet mode
     void toggleQuietMode();
+
+    // Toggle debug mode (audit des flux côté PC)
+    void toggleDebugMode();
     
 private:
     DeviceConfig currentConfig;

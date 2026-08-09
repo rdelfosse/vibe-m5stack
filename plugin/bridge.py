@@ -238,6 +238,13 @@ class M5StackBridge:
                                 # BUT: capture fw version from ping before dropping
                                 if isinstance(msg, dict) and msg.get("type") == "ping":
                                     self.firmware_version = msg.get("fw")
+                                    if "debug" in msg:
+                                        self._apply_debug_flag(msg.get("debug"))
+                                    continue
+                                # État de config poussé par le device (menu Debug)
+                                if isinstance(msg, dict) and msg.get("type") == "config":
+                                    if "debug" in msg:
+                                        self._apply_debug_flag(msg.get("debug"))
                                     continue
                                 # Route voice messages directly to voice handler
                                 if isinstance(msg, dict) and msg.get("type") == "voice":
@@ -253,6 +260,19 @@ class M5StackBridge:
                 logger.error(f"Serial read error: {e}")
                 break
     
+    def _apply_debug_flag(self, value):
+        """Synchronise le flag debug runtime avec l'état annoncé par le device."""
+        try:
+            from plugin import runtime_flags
+            enabled = bool(value)
+            if enabled != runtime_flags.debug_enabled():
+                runtime_flags.set_debug(enabled)
+                logger.info(f"Debug mode (device): {'ON' if enabled else 'OFF'}")
+            else:
+                runtime_flags.set_debug(enabled)
+        except Exception as e:
+            logger.warning(f"Could not apply debug flag: {e}")
+
     def _handle_voice_message(self, msg):
         """Handle incoming voice message by routing to voice handler."""
         try:

@@ -402,6 +402,16 @@ void loop() {
         buttonBLongFired = false;
     }
 
+    // Annonce du mode debug au PC : au boot et à chaque changement (le menu
+    // peut le toggler à tout moment). Les pings le portent aussi (reconnexion).
+    static bool debugStateAnnounced = false;
+    static bool lastAnnouncedDebug = false;
+    if (!debugStateAnnounced || configManager.get().debugMode != lastAnnouncedDebug) {
+        lastAnnouncedDebug = configManager.get().debugMode;
+        debugStateAnnounced = true;
+        bridgeSerial.printf("{\"type\":\"config\",\"debug\":%d}\n", lastAnnouncedDebug ? 1 : 0);
+    }
+
     // Handle serial communication
     if (serialProtocol.receive()) {
         lastRxMs = now;
@@ -523,7 +533,8 @@ void loop() {
             }
             led::welcome();
             if (::millis() - lastPingTime > 5000) {
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\"}\n", FW_VERSION);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0);
                 lastPingTime = ::millis();
             }
             break;
@@ -533,7 +544,8 @@ void loop() {
             drawCatBanner(now, justEntered);
             led::idle();
             if (::millis() - lastPingTime > 5000) {
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\"}\n", FW_VERSION);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0);
                 lastPingTime = ::millis();
             }
             break;
