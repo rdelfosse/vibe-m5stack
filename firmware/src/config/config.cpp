@@ -28,6 +28,7 @@ static const char* NVS_KEY_MODEL = "model";
 static const char* NVS_KEY_DEMO = "demo";
 static const char* NVS_KEY_DEBUG = "debug";
 static const char* NVS_KEY_MIC = "mic";
+static const char* NVS_KEY_VOUT = "vout";
 
 // Magic byte value to detect valid configuration
 static const uint8_t CONFIG_MAGIC = 0x42;
@@ -162,6 +163,34 @@ void ConfigManager::toggleDemoMode() {
     }
 }
 
+void ConfigManager::setVoiceOutMode(VoiceOutMode mode) {
+    currentConfig.voiceOutMode = mode;
+    if (initialized) {
+        save();
+    }
+}
+
+VoiceOutMode ConfigManager::cycleVoiceOutMode(bool forward) {
+    int current = static_cast<int>(currentConfig.voiceOutMode);
+    int max = static_cast<int>(VoiceOutMode::PC);
+    
+    if (forward) {
+        current = (current + 1) % (max + 1);
+    } else {
+        current = (current == 0) ? max : current - 1;
+    }
+    
+    currentConfig.voiceOutMode = static_cast<VoiceOutMode>(current);
+    if (initialized) {
+        save();
+    }
+    return currentConfig.voiceOutMode;
+}
+
+VoiceOutMode ConfigManager::getVoiceOutMode() const {
+    return currentConfig.voiceOutMode;
+}
+
 bool ConfigManager::load() {
     Preferences preferences;
     
@@ -181,6 +210,8 @@ bool ConfigManager::load() {
     currentConfig.debugMode = preferences.getBool(NVS_KEY_DEBUG, false);
     uint8_t micValue = preferences.getUChar(NVS_KEY_MIC, 0);
     currentConfig.micSource = (micValue == 1) ? MicSource::PC : MicSource::DEVICE;
+    uint8_t voutValue = preferences.getUChar(NVS_KEY_VOUT, 0);
+    currentConfig.voiceOutMode = static_cast<VoiceOutMode>(voutValue);
     
     uint8_t brightness = preferences.getUChar(NVS_KEY_BRIGHT, 32);
     // Validate brightness is in our list
@@ -217,6 +248,7 @@ bool ConfigManager::save() {
     preferences.putBool(NVS_KEY_QUIET, currentConfig.quietMode);
     preferences.putBool(NVS_KEY_DEBUG, currentConfig.debugMode);
     preferences.putUChar(NVS_KEY_MIC, currentConfig.micSource == MicSource::PC ? 1 : 0);
+    preferences.putUChar(NVS_KEY_VOUT, static_cast<uint8_t>(currentConfig.voiceOutMode));
     preferences.putUChar(NVS_KEY_BRIGHT, currentConfig.ledBrightness);
     preferences.putUChar(NVS_KEY_MODEL, static_cast<uint8_t>(currentConfig.model));
     preferences.putBool(NVS_KEY_DEMO, currentConfig.demoMode);
@@ -229,6 +261,7 @@ void ConfigManager::applyDefaults() {
     currentConfig.quietMode = false;
     currentConfig.debugMode = false;   // debug OFF par défaut (logs sobres)
     currentConfig.micSource = MicSource::DEVICE;  // micro embarqué par défaut
+    currentConfig.voiceOutMode = VoiceOutMode::OFF; // TTS OFF par défaut
     currentConfig.ledBrightness = 32;
     currentConfig.demoMode = false;
     currentConfig.model = DeviceModel::MISTRAL;

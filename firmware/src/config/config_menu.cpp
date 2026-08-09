@@ -91,8 +91,9 @@ void ConfigMenu::draw(bool forced) {
     M5.Lcd.setTextFont(2);
     M5.Lcd.setTextSize(1);
     
-    // 7 items : 40 + 7*26 = 222 < 225 (bandeau d'aide) — tient sur 240 px.
-    const int ITEM_HEIGHT = 26;
+    // 8 items : 40 + 8*24 = 232 < 240 (bandeau d'aide 8px) — tient sur 240 px.
+    // Recalculé pour 8 items : ITEM_HEIGHT = 24 au lieu de 26.
+    const int ITEM_HEIGHT = 24;
     const int ITEM_Y_START = 40;
     const int ITEM_X = 20;
     const int SELECTOR_X = 5;
@@ -133,6 +134,17 @@ void ConfigMenu::draw(bool forced) {
             case ConfigMenuItem::MIC_SOURCE: {
                 const char* micStr = (configManager.get().micSource == MicSource::PC) ? "PC" : "Device";
                 M5.Lcd.printf("Mic: > %s\n", micStr);
+                break;
+            }
+            case ConfigMenuItem::VOICE_OUT: {
+                const char* voutStr;
+                switch (configManager.get().voiceOutMode) {
+                    case VoiceOutMode::OFF:     voutStr = "Off"; break;
+                    case VoiceOutMode::DEVICE: voutStr = "Device"; break;
+                    case VoiceOutMode::PC:     voutStr = "PC"; break;
+                    default: voutStr = "Off";
+                }
+                M5.Lcd.printf("Voice Out: > %s\n", voutStr);
                 break;
             }
             case ConfigMenuItem::DEMO_MODE: {
@@ -209,6 +221,9 @@ void ConfigMenu::selectItem() {
         case ConfigMenuItem::MIC_SOURCE:
             configManager.toggleMicSource();
             break;
+        case ConfigMenuItem::VOICE_OUT:
+            cycleVoiceOutMode();
+            break;
         case ConfigMenuItem::DEMO_MODE:
             toggleDemoMode();
             break;
@@ -230,6 +245,10 @@ void ConfigMenu::cycleBrightness(bool forward) {
 
 void ConfigMenu::cycleModel(bool forward) {
     configManager.cycleModel(forward);
+}
+
+void ConfigMenu::cycleVoiceOutMode() {
+    configManager.cycleVoiceOutMode();
 }
 
 void ConfigMenu::toggleDemoMode() {

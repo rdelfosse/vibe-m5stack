@@ -7,9 +7,11 @@ SerialProtocol::SerialProtocol()
       lastCreditPercent(0), creditInfoValid(false), newMessageAvailable(false),
       lastAgentState(AgentState::DONE), lastStatusSeq(0), statusValid(false),
       lastThinkingActivity(ThinkingActivity::REASONING), thinkingActivityValid(false),
-      lastVoiceAckState(VoiceAckState::TRANSCRIBING), voiceAckValid(false) {
+      lastVoiceAckState(VoiceAckState::TRANSCRIBING), voiceAckValid(false),
+      lastTtsSeq(0), lastTtsTotal(0), lastTtsDataLen(0), ttsAudioValid(false) {
     lastTitle[0] = '\0'; lastBody[0] = '\0';
     lastStatusDetail[0] = '\0'; lastVoiceAckText[0] = '\0';
+    lastTtsData[0] = '\0';
 }
 
 void SerialProtocol::begin(uint32_t baud) { bridgeSerialBegin(baud); }
@@ -75,6 +77,33 @@ bool SerialProtocol::receive() {
         strlcpy(lastVoiceAckText, text, sizeof(lastVoiceAckText));
         voiceAckValid = true; return true;
     }
+    // TTS streaming messages
+    else if (strcmp(typeStr, "tts_audio") == 0) {
+        lastMessageType = MessageType::TTS_AUDIO;
+        lastTtsSeq = rxDoc["seq"] | 0;
+        const char* dataStr = rxDoc["data"] | "";
+        // Base64 decode the data
+        size_t decodedLen = 0;
+        int result = mbedtls_base64_decode((unsigned char*)lastTtsData, sizeof(lastTtsData) - 1,
+                                         &decodedLen, (const unsigned char*)dataStr, strlen(dataStr));
+        if (result == 0) {
+            lastTtsDataLen = decodedLen;
+            ttsAudioValid = true;
+        } else {
+            lastTtsDataLen = 0;
+            ttsAudioValid = false;
+        }
+        return true;
+    }
+    else if (strcmp(typeStr, "tts_end") == 0) {
+        lastMessageType = MessageType::TTS_END;
+        lastTtsTotal = rxDoc["total"] | 0;
+        return true;
+    }
+    else if (strcmp(typeStr, "tts_stop") == 0) {
+        lastMessageType = MessageType::TTS_STOP;
+        return true;
+    }
     return false;
 }
 
@@ -136,3 +165,10 @@ ThinkingActivity SerialProtocol::getThinkingActivity() const { return lastThinki
 bool SerialProtocol::hasThinkingActivity() const { return thinkingActivityValid; }
 VoiceAckState SerialProtocol::getVoiceAckState() const { return lastVoiceAckState; }
 const char* SerialProtocol::getVoiceAckText() const { return lastVoiceAckText; }
+
+// TTS getters
+uint32_t SerialProtocol::getTtsSeq() const { return lastTtsSeq; }
+uint32_t SerialProtocol::getTtsTotal() const { return lastTtsTotal; }
+const uint8_t* SerialProtocol::getTtsData() const { return (const uint8_t*)lastTtsData; }
+size_t SerialProtocol::getTtsDataLen() const { return lastTtsDataLen; }
+bool SerialProtocol::hasTtsAudio() const { return ttsAudioValid; }

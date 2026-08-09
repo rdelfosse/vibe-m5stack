@@ -14,7 +14,8 @@ enum class VoiceAckState { TRANSCRIBING, DONE };
 
 enum class MessageType {
     INVALID, APPROVAL_REQUEST, APPROVAL_RESPONSE, PING, ACK,
-    CREDIT_INFO, STATUS, VOICE, VOICE_ACK
+    CREDIT_INFO, STATUS, VOICE, VOICE_ACK,
+    TTS_AUDIO, TTS_END, TTS_STOP
 };
 
 #define WATCHDOG_DEAD_MS   12000
@@ -53,6 +54,12 @@ public:
     bool hasThinkingActivity() const;
     VoiceAckState getVoiceAckState() const;
     const char* getVoiceAckText() const;
+    // TTS getters
+    uint32_t getTtsSeq() const;
+    uint32_t getTtsTotal() const;
+    const uint8_t* getTtsData() const;
+    size_t getTtsDataLen() const;
+    bool hasTtsAudio() const;
 private:
     StaticJsonDocument<JSON_RX_SIZE> rxDoc;
     StaticJsonDocument<JSON_TX_SIZE> txDoc;
@@ -72,4 +79,10 @@ private:
     VoiceAckState lastVoiceAckState;
     char lastVoiceAckText[61];
     bool voiceAckValid;
+    // TTS streaming state
+    uint32_t lastTtsSeq;
+    uint32_t lastTtsTotal;
+    char lastTtsData[1025];  // base64 decoded data buffer (~1 Ko raw µ-law)
+    size_t lastTtsDataLen;
+    bool ttsAudioValid;
 };

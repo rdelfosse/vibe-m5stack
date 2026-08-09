@@ -15,6 +15,7 @@
 #include <M5Stack.h>
 #include <mbedtls/base64.h>
 #include "audio/mic_capture.h"
+#include "audio/speaker_play.h"
 #include "config/config.h"
 #include "config/config_menu.h"
 #include "display/anim.h"
@@ -80,6 +81,9 @@ static uint32_t voiceSessionId = 0;
 static VoiceMode voiceMode = VoiceMode::PROMPT;
 static uint32_t voiceRequestId = 0;
 static bool voiceMicDevice = false;   // session en cours : micro embarqué ?
+
+// TTS state tracking
+static bool ttsButtonConsumed[3] = {false, false, false};  // A, B, C - front consommé par TTS stop
 
 // -- Streaming audio (micro device) : machine à états non bloquante ---------
 // Les chunks µ-law (1 Ko brut -> ~1,4 Ko base64) partent PENDANT
@@ -245,6 +249,21 @@ void drawStatusBanner() {
     M5.Lcd.setTextColor(color, BLACK);
     M5.Lcd.setCursor(10, 221);
     M5.Lcd.print(text);
+    
+    // Indicateur TTS (P3) : petit point animé pendant la lecture
+    if (speakerPlayIsPlaying()) {
+        static uint32_t lastTtsIndicator = 0;
+        uint32_t nowMs = millis();
+        // Clignotement rapide (500ms) pour l'indicateur
+        if (nowMs - lastTtsIndicator < 250) {
+            M5.Lcd.fillCircle(310, 230, 3, CYAN);
+        } else if (nowMs - lastTtsIndicator < 500) {
+            M5.Lcd.fillCircle(310, 230, 3, BLACK);
+        }
+        if (nowMs - lastTtsIndicator >= 500) {
+            lastTtsIndicator = nowMs;
+        }
+    }
 }
 
 // Dessine le chat (throttled) puis le bandeau par-dessus
@@ -291,6 +310,26 @@ void loop() {
     buttonManager.update();
     
     uint32_t now = ::millis();
+
+    // TTS interruption by any button (P3): stop playback and consume the press front
+    // "Tout bouton = stop (P3), sans déclencher l'action normale du bouton (consommer le front)"
+    for (int i = 0; i < 3; i++) {
+        AppButton btn = static_cast<AppButton>(i);
+        if (buttonManager.wasPressed(btn) && !ttsButtonConsumed[i]) {
+            if (speakerPlayIsPlaying()) {
+                // Stop TTS playback
+                speakerPlayStop();
+                speakerPlayRelease();
+                // Send tts_stop to PC
+                bridgeSerial.println("{\"type\":\"tts_stop\"}");
+                // Consume the button press front
+                ttsButtonConsumed[i] = true;
+            }
+        } else if (!buttonManager.wasPressed(btn)) {
+            // Reset consumed flag when button is released
+            ttsButtonConsumed[i] = false;
+        }
+    }
 
     // Config menu trigger: long press on C button (1000ms) from IDLE/DONE
     static uint32_t buttonCHoldStart = 0;
@@ -352,6 +391,12 @@ void loop() {
                 buttonALongFired = false;
             } else if (!buttonALongFired && now - buttonAHoldStart >= LONGPRESS_MS) {
                 buttonALongFired = true;
+                // A long pendant une lecture TTS = stop lecture PUIS capture (P3)
+                if (speakerPlayIsPlaying()) {
+                    speakerPlayStop();
+                    speakerPlayRelease();
+                    bridgeSerial.println("{\"type\":\"tts_stop\"}");
+                }
                 if (currentState == AppState::IDLE || currentState == AppState::DONE ||
                     currentState == AppState::WELCOME) {
                     voiceMode = VoiceMode::PROMPT;
@@ -533,6 +578,14 @@ void loop() {
         debugStateAnnounced = true;
         bridgeSerial.printf("{\"type\":\"config\",\"debug\":%d}\n", lastAnnouncedDebug ? 1 : 0);
     }
+    // Annonce du mode Voice Out au PC : même mécanique que debug.
+    static bool voutStateAnnounced = false;
+    static VoiceOutMode lastAnnouncedVout = VoiceOutMode::OFF;
+    if (!voutStateAnnounced || configManager.get().voiceOutMode != lastAnnouncedVout) {
+        lastAnnouncedVout = configManager.get().voiceOutMode;
+        voutStateAnnounced = true;
+        bridgeSerial.printf("{\"type\":\"config\",\"vout\":%d}\n", static_cast<int>(lastAnnouncedVout));
+    }
 
     // Handle serial communication
     if (serialProtocol.receive()) {
@@ -558,6 +611,34 @@ void loop() {
         else if (msgType == MessageType::CREDIT_INFO) {
             if (currentState == AppState::IDLE || currentState == AppState::THINKING) {
                 animator.setCreditInfo(serialProtocol.getCreditPercent(), serialProtocol.hasCreditInfo());
+            }
+        }
+        // TTS streaming messages
+        else if (msgType == MessageType::TTS_AUDIO) {
+            // Receiver TTS audio chunk
+            if (serialProtocol.hasTtsAudio() && configManager.get().voiceOutMode == VoiceOutMode::DEVICE) {
+                const uint8_t* data = serialProtocol.getTtsData();
+                size_t len = serialProtocol.getTtsDataLen();
+                if (len > 0) {
+                    if (!speakerPlayIsPlaying()) {
+                        speakerPlayStart();
+                    }
+                    speakerPlayFeed(data, len);
+                }
+            }
+        }
+        else if (msgType == MessageType::TTS_END) {
+            // End of TTS streaming
+            if (configManager.get().voiceOutMode == VoiceOutMode::DEVICE) {
+                speakerPlayStop();
+                speakerPlayRelease();
+            }
+        }
+        else if (msgType == MessageType::TTS_STOP) {
+            // Stop TTS playback
+            if (speakerPlayIsPlaying()) {
+                speakerPlayStop();
+                speakerPlayRelease();
             }
         }
         else if (msgType == MessageType::STATUS) {
@@ -655,8 +736,10 @@ void loop() {
             }
             led::welcome();
             if (::millis() - lastPingTime > 5000) {
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
-                                    FW_VERSION, configManager.get().debugMode ? 1 : 0);
+                // vout : 0=off, 1=device, 2=pc
+                int voutValue = static_cast<int>(configManager.get().voiceOutMode);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":%d}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, voutValue);
                 lastPingTime = ::millis();
             }
             // Mode démo : bascule auto après 10 s en welcome sans session PC.
@@ -676,8 +759,10 @@ void loop() {
             drawCatBanner(now, justEntered);
             led::idle();
             if (::millis() - lastPingTime > 5000) {
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d}\n",
-                                    FW_VERSION, configManager.get().debugMode ? 1 : 0);
+                // vout : 0=off, 1=device, 2=pc
+                int voutValue = static_cast<int>(configManager.get().voiceOutMode);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":%d}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, voutValue);
                 lastPingTime = ::millis();
             }
             break;
