@@ -545,10 +545,20 @@ async def stream_to_device(audio_data: bytes, broker_mgr) -> bool:
             }
             broker_mgr.broker.bridge.send(message)
             _state.sent_chunks += 1
-            
-            # Pace the sending
-            if seq < _state.total_chunks - 1:
-                await asyncio.sleep(PACING_INTERVAL)
+
+            # Pacing par échéances : sous Windows, asyncio.sleep(0.015) dort
+            # en réalité ~21 ms (granularité du timer) — un sleep fixe ne
+            # tient que ~12 Ko/s alors que la lecture consomme 16 Ko/s
+            # (buffer à sec → micro-silences, voix hachée). En visant
+            # l'échéance absolue, les réveils tardifs sont rattrapés en
+            # envoyant les chunks suivants dos à dos.
+            if seq == 0:
+                pacing_t0 = asyncio.get_running_loop().time()
+            elif seq < _state.total_chunks - 1:
+                target = pacing_t0 + seq * PACING_INTERVAL
+                delay = target - asyncio.get_running_loop().time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
         
         # Send end marker
         message = {
