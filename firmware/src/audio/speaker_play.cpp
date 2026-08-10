@@ -77,32 +77,52 @@ static int16_t ulaw2linear(uint8_t ulaw) {
 // les lectures suivantes. Précautions de mesure : préchauffage (les
 // premières trames sont absorbées par le DMA vide sans bloquer, ce qui
 // gonfle le débit apparent) puis fenêtre de 2 s nominale.
-static void calibrateDacClock() {
+// Mesure le débit réel de consommation du DMA (trames stéréo/s) au réglage
+// courant : préchauffage (DMA vide absorbé sans bloquer), puis ~1 s de
+// silence chronométré.
+static uint32_t measureEffectiveRate() {
     static uint16_t sil[256];
     for (size_t i = 0; i < 256; i++) sil[i] = 0x8000;
     size_t frames = 0;
-    while (frames < 4096) {        // préchauffage : remplir le DMA, non chronométré
+    while (frames < 4096) {
         size_t written = 0;
         i2s_write(SPEAKER_I2S_PORT, sil, sizeof(sil), &written, portMAX_DELAY);
         frames += written / 4;
     }
     uint32_t t0 = millis();
     frames = 0;
-    while (frames < 32000) {       // 2 s nominal de trames stéréo
+    while (frames < 16000) {
         size_t written = 0;
         i2s_write(SPEAKER_I2S_PORT, sil, sizeof(sil), &written, portMAX_DELAY);
         frames += written / 4;     // 4 octets par trame stéréo 16 bits
     }
     uint32_t dt = millis() - t0;
-    uint32_t rate = SPEAKER_SAMPLE_RATE;  // mesure aberrante : brut
-    if (dt > 100) {
-        uint32_t effective = 32000UL * 1000UL / dt;          // trames/s réelles
-        uint32_t corrected = (uint32_t)((16000.0f * 16000.0f) / effective);
-        if (corrected < 4000) corrected = 4000;
-        if (corrected > 48000) corrected = 48000;
-        rate = corrected;
+    if (dt < 50) return 0;         // aberrant
+    return 16000UL * 1000UL / dt;
+}
+
+static void calibrateDacClock() {
+    // ITÉRATIF : l'horloge I2S-DAC ne répond pas linéairement au débit
+    // demandé (diviseurs quantifiés) — une correction en une passe rate sa
+    // cible. Correction multiplicative + re-mesure jusqu'à ±3 %.
+    uint32_t requested = SPEAKER_SAMPLE_RATE;
+    for (int iter = 0; iter < 4; iter++) {
+        uint32_t effective = measureEffectiveRate();
+        Serial.printf("[cal] iter=%d req=%u eff=%u\n", iter, (unsigned)requested,
+                      (unsigned)effective);  // DIAG TEMPORAIRE (retirer avant merge)
+        if (effective == 0) break;
+        // Convergé ?
+        uint32_t err = (effective > SPEAKER_SAMPLE_RATE)
+                           ? effective - SPEAKER_SAMPLE_RATE
+                           : SPEAKER_SAMPLE_RATE - effective;
+        if (err <= SPEAKER_SAMPLE_RATE * 3 / 100) break;
+        uint64_t next = (uint64_t)requested * SPEAKER_SAMPLE_RATE / effective;
+        if (next < 4000) next = 4000;
+        if (next > 48000) next = 48000;
+        if ((uint32_t)next == requested) break;  // clampé/quantifié : stop
+        requested = (uint32_t)next;
+        i2s_set_sample_rates(SPEAKER_I2S_PORT, requested);
     }
-    i2s_set_sample_rates(SPEAKER_I2S_PORT, rate);
 }
 
 static void i2sWriterTask(void* arg) {
