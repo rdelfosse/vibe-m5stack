@@ -96,6 +96,7 @@ class M5StackBridge:
         self._write_lock = threading.Lock()
         self.firmware_version: Optional[str] = None
         self.voice_out_mode: Optional[str] = None  # "off", "device", or "pc"
+        self.voice_lang: Optional[str] = None      # "fr" ou "en" (menu device)
 
         if auto_connect:
             self.connect()
@@ -243,6 +244,8 @@ class M5StackBridge:
                                         self._apply_debug_flag(msg.get("debug"))
                                     if "vout" in msg:
                                         self._apply_vout_mode(msg.get("vout"))
+                                    if "vlang" in msg:
+                                        self._apply_voice_lang(msg.get("vlang"))
                                     continue
                                 # État de config poussé par le device (menu Debug / Voice Out)
                                 if isinstance(msg, dict) and msg.get("type") == "config":
@@ -250,6 +253,8 @@ class M5StackBridge:
                                         self._apply_debug_flag(msg.get("debug"))
                                     if "vout" in msg:
                                         self._apply_vout_mode(msg.get("vout"))
+                                    if "vlang" in msg:
+                                        self._apply_voice_lang(msg.get("vlang"))
                                     continue
                                 # Route voice/audio messages directly to voice handler
                                 if isinstance(msg, dict) and msg.get("type") in (
@@ -325,6 +330,12 @@ class M5StackBridge:
         except Exception as e:
             logger.warning(f"Could not apply debug flag: {e}")
     
+    def _apply_voice_lang(self, value):
+        """Langue de voix TTS annoncée par le device (menu Voice Lang)."""
+        if value in ("fr", "en") and value != self.voice_lang:
+            self.voice_lang = value
+            logger.info(f"Voice Lang (device): {value}")
+
     def _apply_vout_mode(self, value):
         """Update voice out mode from device announcement.
 

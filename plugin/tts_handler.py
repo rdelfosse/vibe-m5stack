@@ -409,17 +409,39 @@ def wav_to_ulaw_16k(wav_data: bytes) -> bytes:
     return pcm16_to_ulaw_16k(pcm_data, sample_rate, channels)
 
 
-async def _get_tts_client(vibe_config=None):
+# Menu « Voice Lang » du device → voice_id Voxtral. Seuls ces deux IDs sont
+# VÉRIFIÉS sur l'API ; pour ajouter une langue, confirmer l'ID d'abord
+# (un ID invalide = toutes les synthèses en erreur).
+VOICE_BY_LANG = {
+    "fr": "fr_marie_neutral",
+    "en": "gb_jane_neutral",
+}
+
+_tts_client_voice = None  # voice_id du client caché (rebuild si changement)
+
+
+async def _get_tts_client(vibe_config=None, voice_override=None):
     """Get or create TTS client.
-    
+
     Args:
         vibe_config: Optional VibeConfigSchema instance. If not provided,
                      will attempt to create one.
+        voice_override: voice_id imposé par le menu du device (sinon celui
+                        du config.toml). Un changement invalide le cache.
     """
-    global _tts_client
-    
-    if _tts_client is not None:
+    global _tts_client, _tts_client_voice
+
+    if _tts_client is not None and (voice_override is None
+                                    or voice_override == _tts_client_voice):
         return _tts_client
+
+    if _tts_client is not None:
+        # Changement de voix : fermer proprement l'ancien client (session HTTP).
+        try:
+            await _tts_client.close()
+        except Exception:
+            pass
+        _tts_client = None
     
     if not is_tts_available():
         logger.warning("TTS not available: missing mistralai SDK or API key")
@@ -454,10 +476,13 @@ async def _get_tts_client(vibe_config=None):
                 self.name = model_config.name
                 self.voice = model_config.voice
                 self.response_format = model_config.response_format
-        
+
         provider = _AudioProviderView(tts_provider_config)
         model = _TTSModelConfigView(tts_model_config)
-        
+        if voice_override:
+            model.voice = voice_override
+
+        _tts_client_voice = model.voice
         _tts_client = make_tts_client(provider, model)
         return _tts_client
         
@@ -698,8 +723,14 @@ async def speak_text(text: str, broker_mgr=None, vibe_config=None) -> bool:
     _state.is_playing = True
     
     try:
+        # Voix selon la langue choisie au menu du device (None = config.toml)
+        voice_override = None
+        if broker_mgr is not None:
+            lang = getattr(broker_mgr.bridge, 'voice_lang', None)
+            voice_override = VOICE_BY_LANG.get(lang)
+
         # Get TTS client
-        tts = await _get_tts_client(vibe_config)
+        tts = await _get_tts_client(vibe_config, voice_override)
         if tts is None:
             logger.warning("Could not create TTS client")
             return False

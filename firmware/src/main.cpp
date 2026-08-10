@@ -90,6 +90,8 @@ static uint32_t lastTtsFeedMs = 0;
 static bool lastAnnouncedDebug = false;
 static bool voutStateAnnounced = false;
 static VoiceOutMode lastAnnouncedVout = VoiceOutMode::OFF;
+static bool vlangStateAnnounced = false;
+static VoiceLang lastAnnouncedVlang = VoiceLang::FR;
 
 
 // -- Streaming audio (micro device) : machine à états non bloquante ---------
@@ -621,6 +623,13 @@ void loop() {
                             : (lastAnnouncedVout == VoiceOutMode::PC) ? "pc" : "off";
         bridgeSerial.printf("{\"type\":\"config\",\"vout\":\"%s\"}\n", voutStr);
     }
+    // Annonce de la langue de voix TTS : même mécanique.
+    if (!vlangStateAnnounced || configManager.get().voiceLang != lastAnnouncedVlang) {
+        lastAnnouncedVlang = configManager.get().voiceLang;
+        vlangStateAnnounced = true;
+        bridgeSerial.printf("{\"type\":\"config\",\"vlang\":\"%s\"}\n",
+                            lastAnnouncedVlang == VoiceLang::EN ? "en" : "fr");
+    }
 
     // DIAG TEMPORAIRE (retirer avant merge) : télémétrie RX sur USB à 1 Hz —
     // COM7 est libre (bridgeSerial = Bluetooth), observable pendant un stream.
@@ -648,6 +657,7 @@ void loop() {
         if (now - lastRxMs > 10000) {
             debugStateAnnounced = false;
             voutStateAnnounced = false;
+            vlangStateAnnounced = false;
         }
         lastRxMs = now;
         MessageType msgType = serialProtocol.getMessageType();
@@ -817,8 +827,9 @@ void loop() {
             if (::millis() - lastPingTime > 5000) {
                 const char* pingVout = (configManager.get().voiceOutMode == VoiceOutMode::DEVICE) ? "device"
                                      : (configManager.get().voiceOutMode == VoiceOutMode::PC) ? "pc" : "off";
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":\"%s\"}\n",
-                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, pingVout);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":\"%s\",\"vlang\":\"%s\"}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, pingVout,
+                                    configManager.get().voiceLang == VoiceLang::EN ? "en" : "fr");
                 lastPingTime = ::millis();
             }
             // Mode démo : bascule auto après 10 s en welcome sans session PC.
@@ -840,8 +851,9 @@ void loop() {
             if (::millis() - lastPingTime > 5000) {
                 const char* pingVout = (configManager.get().voiceOutMode == VoiceOutMode::DEVICE) ? "device"
                                      : (configManager.get().voiceOutMode == VoiceOutMode::PC) ? "pc" : "off";
-                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":\"%s\"}\n",
-                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, pingVout);
+                bridgeSerial.printf("{\"type\":\"ping\",\"fw\":\"%s\",\"debug\":%d,\"vout\":\"%s\",\"vlang\":\"%s\"}\n",
+                                    FW_VERSION, configManager.get().debugMode ? 1 : 0, pingVout,
+                                    configManager.get().voiceLang == VoiceLang::EN ? "en" : "fr");
                 lastPingTime = ::millis();
             }
             break;

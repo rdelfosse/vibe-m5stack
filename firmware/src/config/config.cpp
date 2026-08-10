@@ -29,6 +29,7 @@ static const char* NVS_KEY_DEMO = "demo";
 static const char* NVS_KEY_DEBUG = "debug";
 static const char* NVS_KEY_MIC = "mic";
 static const char* NVS_KEY_VOUT = "vout";
+static const char* NVS_KEY_VLANG = "vlang";
 
 // Magic byte value to detect valid configuration
 static const uint8_t CONFIG_MAGIC = 0x42;
@@ -191,6 +192,15 @@ VoiceOutMode ConfigManager::getVoiceOutMode() const {
     return currentConfig.voiceOutMode;
 }
 
+VoiceLang ConfigManager::cycleVoiceLang() {
+    currentConfig.voiceLang = (currentConfig.voiceLang == VoiceLang::FR)
+        ? VoiceLang::EN : VoiceLang::FR;
+    if (initialized) {
+        save();
+    }
+    return currentConfig.voiceLang;
+}
+
 bool ConfigManager::load() {
     Preferences preferences;
     
@@ -212,6 +222,8 @@ bool ConfigManager::load() {
     currentConfig.micSource = (micValue == 1) ? MicSource::PC : MicSource::DEVICE;
     uint8_t voutValue = preferences.getUChar(NVS_KEY_VOUT, 0);
     currentConfig.voiceOutMode = static_cast<VoiceOutMode>(voutValue);
+    uint8_t vlangValue = preferences.getUChar(NVS_KEY_VLANG, 0);
+    currentConfig.voiceLang = (vlangValue == 1) ? VoiceLang::EN : VoiceLang::FR;
     
     uint8_t brightness = preferences.getUChar(NVS_KEY_BRIGHT, 32);
     // Validate brightness is in our list
@@ -249,6 +261,7 @@ bool ConfigManager::save() {
     preferences.putBool(NVS_KEY_DEBUG, currentConfig.debugMode);
     preferences.putUChar(NVS_KEY_MIC, currentConfig.micSource == MicSource::PC ? 1 : 0);
     preferences.putUChar(NVS_KEY_VOUT, static_cast<uint8_t>(currentConfig.voiceOutMode));
+    preferences.putUChar(NVS_KEY_VLANG, currentConfig.voiceLang == VoiceLang::EN ? 1 : 0);
     preferences.putUChar(NVS_KEY_BRIGHT, currentConfig.ledBrightness);
     preferences.putUChar(NVS_KEY_MODEL, static_cast<uint8_t>(currentConfig.model));
     preferences.putBool(NVS_KEY_DEMO, currentConfig.demoMode);
@@ -262,6 +275,7 @@ void ConfigManager::applyDefaults() {
     currentConfig.debugMode = false;   // debug OFF par défaut (logs sobres)
     currentConfig.micSource = MicSource::DEVICE;  // micro embarqué par défaut
     currentConfig.voiceOutMode = VoiceOutMode::OFF; // TTS OFF par défaut
+    currentConfig.voiceLang = VoiceLang::FR;        // voix française par défaut
     currentConfig.ledBrightness = 32;
     currentConfig.demoMode = false;
     currentConfig.model = DeviceModel::MISTRAL;

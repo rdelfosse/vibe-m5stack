@@ -91,10 +91,9 @@ void ConfigMenu::draw(bool forced) {
     M5.Lcd.setTextFont(2);
     M5.Lcd.setTextSize(1);
     
-    // 8 items : 40 + 8*24 = 232 < 240 (bandeau d'aide 8px) — tient sur 240 px.
-    // Recalculé pour 8 items : ITEM_HEIGHT = 24 au lieu de 26.
-    const int ITEM_HEIGHT = 24;
-    const int ITEM_Y_START = 40;
+    // 9 items : 36 + 9*21 = 225, bandeau d'aide à 228 — tient sur 240 px.
+    const int ITEM_HEIGHT = 21;
+    const int ITEM_Y_START = 36;
     const int ITEM_X = 20;
     const int SELECTOR_X = 5;
     
@@ -145,6 +144,11 @@ void ConfigMenu::draw(bool forced) {
                     default: voutStr = "Off";
                 }
                 M5.Lcd.printf("Voice Out: > %s\n", voutStr);
+                break;
+            }
+            case ConfigMenuItem::VOICE_LANG: {
+                const char* langStr = (configManager.get().voiceLang == VoiceLang::EN) ? "EN" : "FR";
+                M5.Lcd.printf("Voice Lang: > %s\n", langStr);
                 break;
             }
             case ConfigMenuItem::DEMO_MODE: {
@@ -224,6 +228,9 @@ void ConfigMenu::selectItem() {
         case ConfigMenuItem::VOICE_OUT:
             cycleVoiceOutMode();
             break;
+        case ConfigMenuItem::VOICE_LANG:
+            cycleVoiceLang();
+            break;
         case ConfigMenuItem::DEMO_MODE:
             toggleDemoMode();
             break;
@@ -249,6 +256,10 @@ void ConfigMenu::cycleModel(bool forward) {
 
 void ConfigMenu::cycleVoiceOutMode() {
     configManager.cycleVoiceOutMode();
+}
+
+void ConfigMenu::cycleVoiceLang() {
+    configManager.cycleVoiceLang();
 }
 
 void ConfigMenu::toggleDemoMode() {

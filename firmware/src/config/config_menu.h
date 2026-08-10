@@ -24,6 +24,7 @@ enum class ConfigMenuItem {
     DEBUG_MODE,
     MIC_SOURCE,
     VOICE_OUT,
+    VOICE_LANG,
     DEMO_MODE,
     EXIT,
     COUNT
@@ -78,5 +79,6 @@ private:
     void cycleBrightness(bool forward);
     void cycleModel(bool forward);
     void cycleVoiceOutMode();
+    void cycleVoiceLang();
     void toggleDemoMode();
 };
