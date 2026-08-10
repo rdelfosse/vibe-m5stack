@@ -208,6 +208,10 @@ void setup() {
     animator.reset();
     serialProtocol.begin(115200);
     buttonManager.update();
+
+    // DIAG TEMPORAIRE (retirer avant merge) : bip de boot pour valider le
+    // chemin DAC indépendamment du PC. Bip audible = pipeline HP OK.
+    speakerPlayTestTone();
 }
 
 // Watchdog alarm function
@@ -641,10 +645,11 @@ void loop() {
             }
         }
         else if (msgType == MessageType::TTS_END) {
-            // End of TTS streaming
+            // Fin de flux : DRAINER le buffer restant (stop immédiat avalait
+            // la fin des phrases — le PC envoie tts_end dès le dernier chunk,
+            // alors que plusieurs secondes d'audio restent à jouer).
             if (configManager.get().voiceOutMode == VoiceOutMode::DEVICE) {
-                speakerPlayStop();
-                speakerPlayRelease();
+                speakerPlayFinish();
             }
         }
         else if (msgType == MessageType::TTS_STOP) {

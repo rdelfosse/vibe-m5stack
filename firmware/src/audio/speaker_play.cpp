@@ -34,6 +34,7 @@ static size_t s_writePos = 0;
 static size_t s_readPos = 0;
 static bool s_active = false;
 static bool s_stopRequested = false;
+static bool s_finishing = false;   // fin de flux : drainer le buffer puis stop
 static TaskHandle_t s_i2sTaskHandle = nullptr;
 
 // Sémaphore pour synchroniser l'écriture (depuis le thread réseau/loop)
@@ -79,6 +80,12 @@ static void i2sWriterTask(void* arg) {
         size_t toRead = (available > PCM_SAMPLES) ? PCM_SAMPLES : available;
 
         if (toRead == 0) {
+            // Fin de flux (tts_end) ET buffer vide : sortie propre — c'est le
+            // drain qui évite d'avaler la fin des phrases (l'ancien handler
+            // stoppait dès le dernier chunk reçu, buffer encore plein).
+            if (s_finishing) {
+                break;
+            }
             // Pas de données : silence (mi-échelle DAC) pour éviter les pops.
             for (size_t i = 0; i < PCM_SAMPLES; i++) pcmBuffer[i] = 0x8000;
             size_t written = 0;
@@ -105,6 +112,8 @@ static void i2sWriterTask(void* arg) {
     }
 
     // Teardown par la tâche uniquement.
+    s_active = false;            // (cas drain : personne n'appellera stop())
+    s_finishing = false;
     i2s_driver_uninstall(SPEAKER_I2S_PORT);
     s_i2sTaskHandle = nullptr;   // signale à stop() que le teardown est fini
     vTaskDelete(nullptr);
@@ -144,7 +153,9 @@ bool speakerPlayStart() {
     cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
     // Le DAC intégré utilise le canal droit pour GPIO 25
     cfg.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT;
-    cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    // MSB : convention attendue par le DAC intégré (STAND_I2S décale d'un
+    // bit l'alignement des échantillons sur les 8 bits utiles du DAC).
+    cfg.communication_format = I2S_COMM_FORMAT_STAND_MSB;
     cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count = 8;
     cfg.dma_buf_len = 64;
@@ -227,6 +238,39 @@ copy_data:
     xSemaphoreGive(s_bufferMutex);
     
     return success;
+}
+
+void speakerPlayFinish() {
+    // Fin de flux : la tâche draine le buffer puis fait le teardown seule.
+    if (s_active) {
+        s_finishing = true;
+    }
+}
+
+void speakerPlayTestTone() {
+    // Bip 440 Hz (~0,4 s) par le pipeline complet : diagnostic du chemin
+    // DAC indépendamment du PC. Bloquant, réservé au boot.
+    if (!speakerPlayStart()) return;
+    const int SAMPLES = SPEAKER_SAMPLE_RATE * 2 / 5;
+    uint8_t chunk[160];
+    size_t idx = 0;
+    for (int i = 0; i < SAMPLES; i++) {
+        float v = sinf(2.0f * 3.14159265f * 440.0f * i / SPEAKER_SAMPLE_RATE);
+        int16_t s = (int16_t)(12000.0f * v);
+        // encodeur µ-law local (miroir de ulaw2linear)
+        int16_t pcm = s; uint8_t sign = 0;
+        if (pcm < 0) { pcm = -pcm; sign = 0x80; }
+        if (pcm > 32635) pcm = 32635;
+        pcm += 0x84;
+        uint8_t exponent = 7;
+        for (int16_t mask = 0x4000; (pcm & mask) == 0 && exponent > 0; mask >>= 1) exponent--;
+        uint8_t mantissa = (pcm >> (exponent + 3)) & 0x0F;
+        chunk[idx++] = ~(sign | (exponent << 4) | mantissa);
+        if (idx == sizeof(chunk)) { speakerPlayFeed(chunk, idx); idx = 0; }
+    }
+    if (idx > 0) speakerPlayFeed(chunk, idx);
+    vTaskDelay(pdMS_TO_TICKS(600));
+    speakerPlayStop();
 }
 
 void speakerPlayStop() {

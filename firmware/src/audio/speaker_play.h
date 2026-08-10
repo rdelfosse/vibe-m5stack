@@ -48,6 +48,12 @@ bool speakerPlayFeed(const uint8_t* data, size_t len);
 // Arrête la lecture (I2S relâché, buffer vidé).
 void speakerPlayStop();
 
+// Fin de flux (tts_end) : draine le buffer restant puis s'arrête tout seul.
+void speakerPlayFinish();
+
+// Diagnostic : joue un bip 440 Hz (~0,4 s) par le pipeline complet (bloquant).
+void speakerPlayTestTone();
+
 // Libère le buffer PSRAM (appeler après tts_end ou abandon).
 void speakerPlayRelease();
 
