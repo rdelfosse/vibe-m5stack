@@ -18,18 +18,38 @@ SerialProtocol::SerialProtocol()
 void SerialProtocol::begin(uint32_t baud) { bridgeSerialBegin(baud); }
 
 bool SerialProtocol::receive() {
-    // 2 Ko : les messages tts_audio (1 Ko µ-law -> ~1,4 Ko base64 + JSON)
-    // ne tiennent pas dans 512 — ils étaient silencieusement jetés.
-    static char lineBuf[2048]; static size_t lineLen = 0;
-    bool haveLine = false;
-    while (bridgeSerial.available()) {
-        char c = (char)bridgeSerial.read();
-        if (c == '\n' || c == '\r') { if (lineLen > 0) { haveLine = true; break; } }
-        else if (lineLen < sizeof(lineBuf) - 1) { lineBuf[lineLen++] = c; }
-        else { lineLen = 0; }
+    // ⚠️ La queue RX interne de BluetoothSerial ne fait que 512 OCTETS et le
+    // callback SPP jette les octets quand elle est pleine. Une ligne
+    // tts_audio (~700 o) ne survit que si on draine la queue PLUS VITE
+    // qu'elle ne se remplit : on vide TOUT à chaque appel dans notre propre
+    // accumulateur, puis on extrait une ligne par appel.
+    static char acc[6144]; static size_t accLen = 0;
+    static char lineBuf[2048];
+
+    while (bridgeSerial.available() && accLen < sizeof(acc)) {
+        acc[accLen++] = (char)bridgeSerial.read();
     }
-    if (!haveLine) return false;
-    lineBuf[lineLen] = '\0'; lineLen = 0;
+
+    // Extraire la première ligne complète de l'accumulateur.
+    size_t nl = 0;
+    bool haveLine = false;
+    for (; nl < accLen; nl++) {
+        if (acc[nl] == '\n' || acc[nl] == '\r') { haveLine = true; break; }
+    }
+    if (!haveLine) {
+        if (accLen >= sizeof(acc)) accLen = 0;  // ligne monstrueuse : purge
+        return false;
+    }
+
+    size_t lineLen = (nl < sizeof(lineBuf) - 1) ? nl : 0;  // trop longue : jetée
+    if (lineLen > 0) memcpy(lineBuf, acc, lineLen);
+    lineBuf[lineLen] = '\0';
+    // Consommer la ligne + le(s) délimiteur(s) qui suivent.
+    size_t consume = nl + 1;
+    while (consume < accLen && (acc[consume] == '\n' || acc[consume] == '\r')) consume++;
+    memmove(acc, acc + consume, accLen - consume);
+    accLen -= consume;
+    if (lineLen == 0) return false;
     DeserializationError error = deserializeJson(rxDoc, lineBuf);
     if (error) return false;
     const char* typeStr = rxDoc["type"];

@@ -46,8 +46,12 @@ logger = logging.getLogger("m5stack_hook.tts_handler")
 TARGET_SAMPLE_RATE = 16000
 TARGET_CHANNELS = 1
 TARGET_FORMAT = "ulaw"  # G.711 µ-law
-CHUNK_SIZE = 1024  # ~64ms at 16kHz
-PACING_INTERVAL = 0.060  # ~60ms between chunks
+# 512 octets bruts (~32 ms) -> ligne base64+JSON ~740 chars : dimensionné pour
+# la queue RX de 512 octets de BluetoothSerial côté device (drainée chaque
+# frame de 16 ms — un chunk de 1 Ko produisait des lignes d'1,4 Ko qui ne
+# pouvaient jamais y tenir entières, tronquées en silence).
+CHUNK_SIZE = 512
+PACING_INTERVAL = 0.030  # ~30 ms entre chunks de 512 o (32 ms d'audio) : léger surplus d'entrée
 
 
 class VoiceOutMode(Enum):
