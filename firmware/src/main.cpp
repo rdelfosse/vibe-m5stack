@@ -612,8 +612,14 @@ void loop() {
         bridgeSerial.printf("{\"type\":\"config\",\"vout\":\"%s\"}\n", voutStr);
     }
 
-    // Handle serial communication
-    if (serialProtocol.receive()) {
+    // Handle serial communication.
+    // ⚠️ PLUSIEURS messages par itération : pendant un stream TTS le PC envoie
+    // ~33 lignes/s alors que loop() tourne à ~40 Hz (delay(16) + rendu LCD).
+    // À une ligne par tour, l'accumulateur RX se remplit, la queue BT de
+    // 512 octets déborde et le callback SPP jette des octets EN MILIEU de
+    // ligne → chunks corrompus, tts_end perdu. Budget borné pour ne pas
+    // affamer l'UI.
+    for (int rxBudget = 12; rxBudget > 0 && serialProtocol.receive(); rxBudget--) {
         // Reprise après silence RX (session PC (re)démarrée) : ré-annoncer la
         // config — l'annonce du boot part dans le vide si personne n'écoute,
         // et le PC croirait Voice Out/Debug éteints jusqu'au prochain toggle.
