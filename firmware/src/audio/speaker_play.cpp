@@ -16,6 +16,7 @@
 #include <Arduino.h>
 #include <driver/i2s.h>
 #include <driver/dac.h>
+#include <driver/gpio.h>
 #include <esp_heap_caps.h>
 #include <freertos/semphr.h>
 #include <ArduinoJson.h>
@@ -133,9 +134,13 @@ static void i2sWriterTask(void* arg) {
     s_finishing = false;
     i2s_driver_uninstall(SPEAKER_I2S_PORT);
     // ÉTEINDRE le DAC : après l'uninstall il reste figé à mi-échelle
-    // (~1,65 V) dans l'ampli toujours alimenté du Fire -> courant continu
-    // qui écroule le rail 5 V des NeoPixels (LED mortes en permanence).
+    // (~1,65 V) dans l'ampli toujours alimenté du Fire -> courant continu.
     dac_output_disable(DAC_CHANNEL_1);
+    // Et re-libérer GPIO 26 (Port B / NeoHEX) que le mode DAC a réquisitionné
+    // — FastLED le reconfigurera à son prochain show().
+    dac_output_disable(DAC_CHANNEL_2);
+    gpio_reset_pin(GPIO_NUM_26);
+    gpio_set_direction(GPIO_NUM_26, GPIO_MODE_OUTPUT);
     s_i2sTaskHandle = nullptr;   // signale à stop() que le teardown est fini
     vTaskDelete(nullptr);
 }
@@ -199,6 +204,13 @@ bool speakerPlayStart() {
     // Ré-activer explicitement le DAC : après un uninstall (cycle précédent
     // ou passage micro), le routage ne survit pas toujours au réinstall.
     dac_output_enable(DAC_CHANNEL_1);
+    // ⚠️ LIBÉRER le canal 2 : i2s_set_pin(NULL) en mode DAC réquisitionne
+    // LES DEUX broches DAC (25 ET 26) — or GPIO 26 = Port B = la ligne de
+    // données du NeoHEX. Sans cette libération, les LED du port B meurent
+    // dès le premier passage du speaker (donc dès le bip de boot).
+    dac_output_disable(DAC_CHANNEL_2);
+    gpio_reset_pin(GPIO_NUM_26);
+    gpio_set_direction(GPIO_NUM_26, GPIO_MODE_OUTPUT);
 
     // AUTO-CALIBRATION (une fois par boot) : l'horloge I2S-DAC ne respecte
     // pas la fréquence demandée (facteur 2-5x selon la config — même famille
