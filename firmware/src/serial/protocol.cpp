@@ -9,6 +9,7 @@ uint32_t g_ttsBytesOk = 0;
 uint32_t g_ttsDecodeErrors = 0;
 uint32_t g_rxParseErrors = 0;
 uint32_t g_rxOversized = 0;
+uint32_t g_rxLines = 0;  // DIAG TEMPORAIRE (retirer avant merge)
 
 SerialProtocol::SerialProtocol()
     : lastMessageType(MessageType::INVALID), lastRequestId(0),
@@ -50,6 +51,14 @@ bool SerialProtocol::receive() {
 
     size_t lineLen = (nl < sizeof(lineBuf) - 1) ? nl : 0;  // trop longue : jetée
     if (nl >= sizeof(lineBuf) - 1) g_rxOversized++;
+#if USE_BT_SERIAL
+    // DIAG TEMPORAIRE (retirer avant merge) : aperçu d'une ligne sur 16.
+    g_rxLines++;
+    if ((g_rxLines & 0x0F) == 1) {
+        Serial.printf("[rx] line#%u len=%u: %.24s\n",
+                      (unsigned)g_rxLines, (unsigned)nl, acc);
+    }
+#endif
     if (lineLen > 0) memcpy(lineBuf, acc, lineLen);
     lineBuf[lineLen] = '\0';
     // Consommer la ligne + le(s) délimiteur(s) qui suivent.

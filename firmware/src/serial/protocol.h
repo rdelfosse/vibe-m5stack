@@ -94,3 +94,4 @@ extern uint32_t g_ttsBytesOk;
 extern uint32_t g_ttsDecodeErrors;
 extern uint32_t g_rxParseErrors;
 extern uint32_t g_rxOversized;
+extern uint32_t g_rxLines;  // DIAG TEMPORAIRE (retirer avant merge)

@@ -50,8 +50,12 @@ TARGET_FORMAT = "ulaw"  # G.711 µ-law
 # la queue RX de 512 octets de BluetoothSerial côté device (drainée chaque
 # frame de 16 ms — un chunk de 1 Ko produisait des lignes d'1,4 Ko qui ne
 # pouvaient jamais y tenir entières, tronquées en silence).
-CHUNK_SIZE = 512
-PACING_INTERVAL = 0.030  # ~30 ms entre chunks de 512 o (32 ms d'audio) : léger surplus d'entrée
+# ⚠️ Une ligne tts_audio arrive au device en UN événement SPP, et la queue RX
+# de BluetoothSerial fait 512 octets : la ligne entière (JSON + base64) doit
+# tenir dessous, sinon la fin de CHAQUE chunk est jetée par le callback.
+# 256 o de µ-law → ~390 o de ligne. 256/0.015 ≈ 17 Ko/s > 16 Ko/s temps réel.
+CHUNK_SIZE = 256
+PACING_INTERVAL = 0.015
 
 
 class VoiceOutMode(Enum):

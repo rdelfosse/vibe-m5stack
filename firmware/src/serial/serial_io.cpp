@@ -24,6 +24,9 @@ static uint8_t rxRing[16384];
 static volatile size_t rxHead = 0;
 static volatile size_t rxTail = 0;
 
+// DIAG TEMPORAIRE (retirer avant merge)
+volatile uint32_t g_btDrained = 0;
+
 static void rxDrainTask(void*) {
     for (;;) {
         while (bridgeSerial.available()) {
@@ -32,15 +35,21 @@ static void rxDrainTask(void*) {
             size_t next = (rxHead + 1) % sizeof(rxRing);
             if (next == rxTail) break;  // ring plein : l'octet reste dans la queue BT
             rxRing[rxHead] = (uint8_t)c;
+            g_btDrained = g_btDrained + 1;
             rxHead = next;
         }
-        vTaskDelay(pdMS_TO_TICKS(2));
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
 void bridgeSerialBegin(uint32_t /*baud*/) {
     bridgeSerial.begin("M5Stack-Vibe");
-    xTaskCreatePinnedToCore(rxDrainTask, "btRxDrain", 3072, nullptr, 3, nullptr, 0);
+    // Core 1 + priorité haute : le callback SPP pousse un événement ENTIER
+    // (~729 o pour un chunk TTS de 512 o) d'un bloc depuis le core 0 — plus
+    // gros que la queue de 512 o. Seul un drainage en VRAI parallèle (autre
+    // core) peut vider pendant la poussée ; sur le même core, la tâche est
+    // préemptée et 217 octets partent à la poubelle à chaque chunk.
+    xTaskCreatePinnedToCore(rxDrainTask, "btRxDrain", 3072, nullptr, 19, nullptr, 1);
 }
 
 size_t bridgeRxAvailable() {

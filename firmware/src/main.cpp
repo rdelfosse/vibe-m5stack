@@ -612,6 +612,18 @@ void loop() {
         bridgeSerial.printf("{\"type\":\"config\",\"vout\":\"%s\"}\n", voutStr);
     }
 
+    // DIAG TEMPORAIRE (retirer avant merge) : télémétrie RX sur USB à 1 Hz —
+    // COM7 est libre (bridgeSerial = Bluetooth), observable pendant un stream.
+    static uint32_t lastDiagMs = 0;
+    if (now - lastDiagMs >= 1000) {
+        lastDiagMs = now;
+        Serial.printf("[diag] chunks=%u bytes=%u dec_err=%u parse_err=%u oversz=%u playing=%d vout=%d drained=%u ring=%u lines=%u\n",
+            (unsigned)g_ttsChunksOk, (unsigned)g_ttsBytesOk, (unsigned)g_ttsDecodeErrors,
+            (unsigned)g_rxParseErrors, (unsigned)g_rxOversized,
+            (int)speakerPlayIsPlaying(), (int)configManager.get().voiceOutMode,
+            (unsigned)g_btDrained, (unsigned)bridgeRxAvailable(), (unsigned)g_rxLines);
+    }
+
     // Handle serial communication.
     // ⚠️ PLUSIEURS messages par itération : pendant un stream TTS le PC envoie
     // ~33 lignes/s alors que loop() tourne à ~40 Hz (delay(16) + rendu LCD).
