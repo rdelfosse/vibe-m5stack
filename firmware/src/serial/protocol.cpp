@@ -25,16 +25,16 @@ SerialProtocol::SerialProtocol()
 void SerialProtocol::begin(uint32_t baud) { bridgeSerialBegin(baud); }
 
 bool SerialProtocol::receive() {
-    // ⚠️ La queue RX interne de BluetoothSerial ne fait que 512 OCTETS et le
-    // callback SPP jette les octets quand elle est pleine. Une ligne
-    // tts_audio (~700 o) ne survit que si on draine la queue PLUS VITE
-    // qu'elle ne se remplit : on vide TOUT à chaque appel dans notre propre
-    // accumulateur, puis on extrait une ligne par appel.
+    // La queue BT de 512 octets est drainée en continu par la tâche btRxDrain
+    // (voir serial_io.cpp) vers un ring de 16 Ko ; ici on transvase le ring
+    // dans l'accumulateur et on extrait une ligne par appel.
     static char acc[6144]; static size_t accLen = 0;
     static char lineBuf[2048];
 
-    while (bridgeSerial.available() && accLen < sizeof(acc)) {
-        acc[accLen++] = (char)bridgeSerial.read();
+    while (bridgeRxAvailable() && accLen < sizeof(acc)) {
+        int c = bridgeRxRead();
+        if (c < 0) break;
+        acc[accLen++] = (char)c;
     }
 
     // Extraire la première ligne complète de l'accumulateur.
@@ -59,7 +59,14 @@ bool SerialProtocol::receive() {
     accLen -= consume;
     if (lineLen == 0) return false;
     DeserializationError error = deserializeJson(rxDoc, lineBuf);
-    if (error) { g_rxParseErrors++; return false; }
+    if (error) {
+        g_rxParseErrors++;
+#if USE_BT_SERIAL
+        // DIAG TEMPORAIRE (retirer avant merge) : détail des lignes rejetées.
+        Serial.printf("[rx] parse_err %s: %.48s\n", error.c_str(), lineBuf);
+#endif
+        return false;
+    }
     const char* typeStr = rxDoc["type"];
     if (!typeStr) return false;
     if (strcmp(typeStr, "approval") == 0) {
@@ -132,6 +139,10 @@ bool SerialProtocol::receive() {
     else if (strcmp(typeStr, "tts_end") == 0) {
         lastMessageType = MessageType::TTS_END;
         lastTtsTotal = rxDoc["total"] | 0;
+#if USE_BT_SERIAL
+        // DIAG TEMPORAIRE (retirer avant merge)
+        Serial.printf("[rx] tts_end total=%u\n", (unsigned)lastTtsTotal);
+#endif
         return true;
     }
     else if (strcmp(typeStr, "tts_stop") == 0) {

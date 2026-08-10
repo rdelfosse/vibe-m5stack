@@ -35,3 +35,13 @@
 #endif
 
 void bridgeSerialBegin(uint32_t baud);
+
+// Lecture RX via ring buffer drainé en continu par une tâche dédiée.
+// ⚠️ La queue RX de BluetoothSerial ne fait que 512 octets et le callback SPP
+// JETTE les octets quand elle est pleine (« RX Full! Discarding N bytes »).
+// loop() (delay(16) + rendu LCD) laisse des trous de 20-40 ms pendant lesquels
+// un stream TTS (~24 Ko/s) la fait déborder : il faut drainer toutes les 2 ms,
+// indépendamment de la cadence de loop(). Toujours lire par ces helpers,
+// jamais bridgeSerial.available()/read() directement.
+size_t bridgeRxAvailable();
+int bridgeRxRead();  // -1 si vide

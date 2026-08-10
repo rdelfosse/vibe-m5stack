@@ -18,8 +18,41 @@
 #if USE_BT_SERIAL
 BluetoothSerial bridgeSerial;
 
+// Ring SPSC : la tâche de drainage écrit (head), receive() lit (tail).
+// 16 Ko ≈ 700 ms de stream TTS — le consommateur suit largement.
+static uint8_t rxRing[16384];
+static volatile size_t rxHead = 0;
+static volatile size_t rxTail = 0;
+
+static void rxDrainTask(void*) {
+    for (;;) {
+        while (bridgeSerial.available()) {
+            int c = bridgeSerial.read();
+            if (c < 0) break;
+            size_t next = (rxHead + 1) % sizeof(rxRing);
+            if (next == rxTail) break;  // ring plein : l'octet reste dans la queue BT
+            rxRing[rxHead] = (uint8_t)c;
+            rxHead = next;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+}
+
 void bridgeSerialBegin(uint32_t /*baud*/) {
     bridgeSerial.begin("M5Stack-Vibe");
+    xTaskCreatePinnedToCore(rxDrainTask, "btRxDrain", 3072, nullptr, 3, nullptr, 0);
+}
+
+size_t bridgeRxAvailable() {
+    size_t h = rxHead, t = rxTail;
+    return (h >= t) ? (h - t) : (sizeof(rxRing) - t + h);
+}
+
+int bridgeRxRead() {
+    if (rxTail == rxHead) return -1;
+    uint8_t c = rxRing[rxTail];
+    rxTail = (rxTail + 1) % sizeof(rxRing);
+    return c;
 }
 #else
 void bridgeSerialBegin(uint32_t baud) {
@@ -28,4 +61,7 @@ void bridgeSerialBegin(uint32_t baud) {
         delay(10);
     }
 }
+
+size_t bridgeRxAvailable() { return Serial.available(); }
+int bridgeRxRead() { return Serial.read(); }
 #endif
