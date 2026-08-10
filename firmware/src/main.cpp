@@ -666,6 +666,16 @@ void loop() {
             if (configManager.get().voiceOutMode == VoiceOutMode::DEVICE) {
                 speakerPlayFinish();
             }
+            // Télémétrie de diagnostic : ce que le device a RÉELLEMENT reçu
+            // (visible dans le log du hook PC).
+            bridgeSerial.printf(
+                "{\"type\":\"tts_diag\",\"chunks\":%u,\"bytes\":%u,\"decode_err\":%u,"
+                "\"parse_err\":%u,\"oversized\":%u,\"expected\":%u}\n",
+                (unsigned)g_ttsChunksOk, (unsigned)g_ttsBytesOk,
+                (unsigned)g_ttsDecodeErrors, (unsigned)g_rxParseErrors,
+                (unsigned)g_rxOversized, (unsigned)serialProtocol.getTtsTotal());
+            g_ttsChunksOk = 0; g_ttsBytesOk = 0; g_ttsDecodeErrors = 0;
+            g_rxParseErrors = 0; g_rxOversized = 0;
         }
         else if (msgType == MessageType::TTS_STOP) {
             // Stop TTS playback

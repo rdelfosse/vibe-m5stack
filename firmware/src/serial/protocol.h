@@ -87,3 +87,10 @@ private:
     size_t lastTtsDataLen;
     bool ttsAudioValid;
 };
+
+// Télémétrie de diagnostic TTS (définie dans protocol.cpp).
+extern uint32_t g_ttsChunksOk;
+extern uint32_t g_ttsBytesOk;
+extern uint32_t g_ttsDecodeErrors;
+extern uint32_t g_rxParseErrors;
+extern uint32_t g_rxOversized;

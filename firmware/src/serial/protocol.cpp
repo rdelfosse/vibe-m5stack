@@ -3,6 +3,13 @@
 #include <Arduino.h>
 #include <mbedtls/base64.h>
 
+// Télémétrie de diagnostic TTS (remontée au PC à chaque tts_end).
+uint32_t g_ttsChunksOk = 0;
+uint32_t g_ttsBytesOk = 0;
+uint32_t g_ttsDecodeErrors = 0;
+uint32_t g_rxParseErrors = 0;
+uint32_t g_rxOversized = 0;
+
 SerialProtocol::SerialProtocol()
     : lastMessageType(MessageType::INVALID), lastRequestId(0),
       lastCreditPercent(0), creditInfoValid(false), newMessageAvailable(false),
@@ -42,6 +49,7 @@ bool SerialProtocol::receive() {
     }
 
     size_t lineLen = (nl < sizeof(lineBuf) - 1) ? nl : 0;  // trop longue : jetée
+    if (nl >= sizeof(lineBuf) - 1) g_rxOversized++;
     if (lineLen > 0) memcpy(lineBuf, acc, lineLen);
     lineBuf[lineLen] = '\0';
     // Consommer la ligne + le(s) délimiteur(s) qui suivent.
@@ -51,7 +59,7 @@ bool SerialProtocol::receive() {
     accLen -= consume;
     if (lineLen == 0) return false;
     DeserializationError error = deserializeJson(rxDoc, lineBuf);
-    if (error) return false;
+    if (error) { g_rxParseErrors++; return false; }
     const char* typeStr = rxDoc["type"];
     if (!typeStr) return false;
     if (strcmp(typeStr, "approval") == 0) {
@@ -112,9 +120,12 @@ bool SerialProtocol::receive() {
         if (result == 0) {
             lastTtsDataLen = decodedLen;
             ttsAudioValid = true;
+            g_ttsChunksOk++;
+            g_ttsBytesOk += decodedLen;
         } else {
             lastTtsDataLen = 0;
             ttsAudioValid = false;
+            g_ttsDecodeErrors++;
         }
         return true;
     }

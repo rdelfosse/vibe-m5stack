@@ -257,6 +257,10 @@ class M5StackBridge:
                                 ):
                                     self._handle_voice_message(msg)
                                     continue
+                                # Télémétrie TTS du device : à logger tel quel.
+                                if isinstance(msg, dict) and msg.get("type") == "tts_diag":
+                                    logger.info(f"TTS diag (device): {msg}")
+                                    continue
                                 # Le device coupe la lecture TTS (bouton) :
                                 # stopper le stream côté PC aussi.
                                 if isinstance(msg, dict) and msg.get("type") == "tts_stop":
