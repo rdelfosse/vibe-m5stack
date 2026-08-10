@@ -101,32 +101,26 @@ static uint32_t measureEffectiveRate() {
     return 16000UL * 1000UL / dt;
 }
 
+// Facteur de duplication des échantillons (voir calibrateDacClock).
+static float s_dupRatio = 5.52f;
+
 static void calibrateDacClock() {
-    // ITÉRATIF : l'horloge I2S-DAC ne répond pas linéairement au débit
-    // demandé (diviseurs quantifiés) — une correction en une passe rate sa
-    // cible. Correction multiplicative + re-mesure jusqu'à ±3 %.
-    uint32_t requested = SPEAKER_SAMPLE_RATE;
-    for (int iter = 0; iter < 4; iter++) {
-        uint32_t effective = measureEffectiveRate();
-        Serial.printf("[cal] iter=%d req=%u eff=%u\n", iter, (unsigned)requested,
-                      (unsigned)effective);  // DIAG TEMPORAIRE (retirer avant merge)
-        if (effective == 0) break;
-        // Convergé ?
-        uint32_t err = (effective > SPEAKER_SAMPLE_RATE)
-                           ? effective - SPEAKER_SAMPLE_RATE
-                           : SPEAKER_SAMPLE_RATE - effective;
-        if (err <= SPEAKER_SAMPLE_RATE * 3 / 100) break;
-        // Plancher BAS assumé : l'horloge tourne 5,5× trop vite (mesuré :
-        // req 16000 → eff 88397), la cible réelle est ~2900 Hz demandés.
-        // L'ancien plancher de 4000 bloquait la convergence à 22 kHz
-        // effectifs = voix 1,38× trop rapide.
-        uint64_t next = (uint64_t)requested * SPEAKER_SAMPLE_RATE / effective;
-        if (next < 1000) next = 1000;
-        if (next > 48000) next = 48000;
-        if ((uint32_t)next == requested) break;  // clampé/quantifié : stop
-        requested = (uint32_t)next;
-        i2s_set_sample_rates(SPEAKER_I2S_PORT, requested);
-    }
+    // On NE corrige PAS l'horloge : mesures [cal] — req 16000 → eff 88397
+    // (5,52×, reproductible au Hz près entre les boots), req 4000 → 22130,
+    // et en dessous le diviseur devient chaotique (req 1763 → eff 250000 !).
+    // Le minimum atteignable (~22 kHz) reste 1,38× trop rapide : impossible
+    // d'obtenir 16 kHz réels via i2s_set_sample_rates. Stratégie inverse :
+    // horloge laissée au réglage nominal STABLE, et chaque échantillon est
+    // dupliqué eff/16000 fois à l'alimentation (suréchantillonnage ZOH,
+    // inaudible : le DAC produit le même escalier qu'à 16 kHz natifs).
+    uint32_t effective = measureEffectiveRate();
+    Serial.printf("[cal] eff=%u dup=%.3f\n", (unsigned)effective,
+                  effective ? (double)effective / SPEAKER_SAMPLE_RATE : 0.0);  // DIAG TEMPORAIRE
+    if (effective == 0) return;                       // mesure ratée : garder l'ancien ratio
+    float ratio = (float)effective / SPEAKER_SAMPLE_RATE;
+    if (ratio < 1.0f) ratio = 1.0f;
+    if (ratio > 20.0f) ratio = 20.0f;
+    s_dupRatio = ratio;
 }
 
 static void i2sWriterTask(void* arg) {
@@ -175,20 +169,39 @@ static void i2sWriterTask(void* arg) {
 
         // µ-law -> PCM16 signé -> non signé (le DAC intégré lit les 8 bits
         // hauts d'un échantillon non signé ; du signé brut = distorsion).
-        // Chaque échantillon est DUPLIQUÉ (slots gauche+droit d'une trame).
-        if (toRead > PCM_SAMPLES / 2) toRead = PCM_SAMPLES / 2;
-        for (size_t i = 0; i < toRead; i++) {
+        // Chaque échantillon source est répété s_dupRatio fois (accumulateur
+        // fractionnaire) pour compenser l'horloge 5,5× trop rapide, chaque
+        // répétition occupant les slots gauche+droit d'une trame stéréo.
+        static float dupAcc = 0.0f;
+        size_t frames = 0;
+        esp_err_t err = ESP_OK;
+        for (size_t i = 0; i < toRead && err == ESP_OK; i++) {
             int16_t s = ulaw2linear(s_buffer[s_readPos]);
             uint16_t u = (uint16_t)(s + 32768);
-            pcmBuffer[2 * i] = u;
-            pcmBuffer[2 * i + 1] = u;
             s_readPos = (s_readPos + 1) % s_bufferSize;
+            dupAcc += s_dupRatio;
+            int reps = (int)dupAcc;
+            dupAcc -= reps;
+            for (int r = 0; r < reps; r++) {
+                pcmBuffer[2 * frames] = u;
+                pcmBuffer[2 * frames + 1] = u;
+                frames++;
+                if (frames == PCM_SAMPLES / 2) {
+                    size_t written = 0;
+                    err = i2s_write(SPEAKER_I2S_PORT, pcmBuffer,
+                                    frames * 2 * sizeof(uint16_t), &written,
+                                    100 / portTICK_PERIOD_MS);
+                    frames = 0;
+                    if (err != ESP_OK) break;
+                }
+            }
         }
-
-        size_t written = 0;
-        esp_err_t err = i2s_write(SPEAKER_I2S_PORT, pcmBuffer,
-                                  toRead * 2 * sizeof(uint16_t), &written,
-                                  100 / portTICK_PERIOD_MS);
+        if (frames > 0 && err == ESP_OK) {
+            size_t written = 0;
+            err = i2s_write(SPEAKER_I2S_PORT, pcmBuffer,
+                            frames * 2 * sizeof(uint16_t), &written,
+                            100 / portTICK_PERIOD_MS);
+        }
         if (err != ESP_OK) {
             break;
         }
