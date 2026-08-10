@@ -68,10 +68,51 @@ static int16_t ulaw2linear(uint8_t ulaw) {
 // Tâche de lecture I2S : lit du buffer circulaire et envoie à I2S DAC.
 // TOUT le teardown du driver appartient à cette tâche (jamais à stop() —
 // désinstaller pendant qu'un i2s_write est en cours = LoadProhibited/reboot).
+// AUTO-CALIBRATION : l'horloge I2S-DAC ne respecte pas la fréquence demandée
+// (facteur 2-5x selon la config — même famille de quirks que l'ADC micro).
+// On chronomètre l'écriture de silence (i2s_write bloque au rythme réel du
+// DMA) et on corrige le sample rate. À CHAQUE lecture, pas une fois par
+// boot : le facteur dépend de l'état du driver, qui change après un passage
+// micro (ADC) — une calibration de boot donnait une voix « accélérée » sur
+// les lectures suivantes. Précautions de mesure : préchauffage (les
+// premières trames sont absorbées par le DMA vide sans bloquer, ce qui
+// gonfle le débit apparent) puis fenêtre de 2 s nominale.
+static void calibrateDacClock() {
+    static uint16_t sil[256];
+    for (size_t i = 0; i < 256; i++) sil[i] = 0x8000;
+    size_t frames = 0;
+    while (frames < 4096) {        // préchauffage : remplir le DMA, non chronométré
+        size_t written = 0;
+        i2s_write(SPEAKER_I2S_PORT, sil, sizeof(sil), &written, portMAX_DELAY);
+        frames += written / 4;
+    }
+    uint32_t t0 = millis();
+    frames = 0;
+    while (frames < 32000) {       // 2 s nominal de trames stéréo
+        size_t written = 0;
+        i2s_write(SPEAKER_I2S_PORT, sil, sizeof(sil), &written, portMAX_DELAY);
+        frames += written / 4;     // 4 octets par trame stéréo 16 bits
+    }
+    uint32_t dt = millis() - t0;
+    uint32_t rate = SPEAKER_SAMPLE_RATE;  // mesure aberrante : brut
+    if (dt > 100) {
+        uint32_t effective = 32000UL * 1000UL / dt;          // trames/s réelles
+        uint32_t corrected = (uint32_t)((16000.0f * 16000.0f) / effective);
+        if (corrected < 4000) corrected = 4000;
+        if (corrected > 48000) corrected = 48000;
+        rate = corrected;
+    }
+    i2s_set_sample_rates(SPEAKER_I2S_PORT, rate);
+}
+
 static void i2sWriterTask(void* arg) {
     (void)arg;
     constexpr size_t PCM_SAMPLES = 128;
     static uint16_t pcmBuffer[PCM_SAMPLES];  // non signé : format du DAC intégré
+
+    // Calibrer l'horloge pendant que le pré-buffer se remplit (le flux BT
+    // s'accumule dans le ring PSRAM de 10 s : rien n'est perdu).
+    calibrateDacClock();
 
     // PRÉ-BUFFER : ne pas commencer à jouer avant ~1,5 s d'audio (ou fin de
     // flux). Le PC envoie 64 ms d'audio par 60 ms : partir immédiatement
@@ -212,34 +253,9 @@ bool speakerPlayStart() {
     gpio_reset_pin(GPIO_NUM_26);
     gpio_set_direction(GPIO_NUM_26, GPIO_MODE_OUTPUT);
 
-    // AUTO-CALIBRATION (une fois par boot) : l'horloge I2S-DAC ne respecte
-    // pas la fréquence demandée (facteur 2-5x selon la config — même famille
-    // de quirks que l'ADC côté micro). On chronomètre l'écriture de silence
-    // (i2s_write bloque au rythme réel du DMA) et on corrige le sample rate.
-    static uint32_t s_calibratedRate = 0;
-    if (s_calibratedRate == 0) {
-        static uint16_t sil[256];
-        for (size_t i = 0; i < 256; i++) sil[i] = 0x8000;
-        uint32_t t0 = millis();
-        size_t frames = 0;
-        while (frames < 16000) {   // 1 s nominal de trames stéréo
-            size_t written = 0;
-            i2s_write(SPEAKER_I2S_PORT, sil, sizeof(sil), &written, portMAX_DELAY);
-            frames += written / 4;  // 4 octets par trame stéréo 16 bits
-        }
-        uint32_t dt = millis() - t0;
-        if (dt > 50) {
-            uint32_t effective = 16000UL * 1000UL / dt;          // trames/s réelles
-            uint32_t corrected = (uint32_t)((16000.0f * 16000.0f) / effective);
-            if (corrected < 4000) corrected = 4000;
-            if (corrected > 48000) corrected = 48000;
-            s_calibratedRate = corrected;
-        } else {
-            s_calibratedRate = SPEAKER_SAMPLE_RATE;  // mesure aberrante : brut
-        }
-    }
-    i2s_set_sample_rates(SPEAKER_I2S_PORT, s_calibratedRate);
-    
+    // La calibration de l'horloge se fait DANS la tâche de lecture (en
+    // parallèle du pré-buffer) — voir calibrateDacClock().
+
     // Démarrer la tâche de lecture
     s_active = true;
     xTaskCreatePinnedToCore(i2sWriterTask, "i2sWriter", 4096, nullptr, 10, &s_i2sTaskHandle, APP_CPU_NUM);
