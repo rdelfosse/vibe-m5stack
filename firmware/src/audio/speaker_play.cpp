@@ -132,6 +132,10 @@ static void i2sWriterTask(void* arg) {
     s_active = false;            // (cas drain : personne n'appellera stop())
     s_finishing = false;
     i2s_driver_uninstall(SPEAKER_I2S_PORT);
+    // ÉTEINDRE le DAC : après l'uninstall il reste figé à mi-échelle
+    // (~1,65 V) dans l'ampli toujours alimenté du Fire -> courant continu
+    // qui écroule le rail 5 V des NeoPixels (LED mortes en permanence).
+    dac_output_disable(DAC_CHANNEL_1);
     s_i2sTaskHandle = nullptr;   // signale à stop() que le teardown est fini
     vTaskDelete(nullptr);
 }
