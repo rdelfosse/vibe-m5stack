@@ -27,11 +27,26 @@ enum class MicSource {
     PC        // micro du PC (sounddevice côté plugin)
 };
 
+// Mode de sortie vocale (TTS)
+enum class VoiceOutMode {
+    OFF,      // Pas de lecture (défaut)
+    DEVICE,   // Lecture sur le haut-parleur du device
+    PC        // Lecture sur les enceintes du PC
+};
+
+// Langue de la voix TTS (mappée sur un voice_id Voxtral côté plugin)
+enum class VoiceLang {
+    FR,       // fr_marie_neutral (défaut)
+    EN        // gb_jane_neutral
+};
+
 // Configuration structure
 struct DeviceConfig {
     bool quietMode;           // true = silent (no vibration/beep)
     bool debugMode;           // true = le PC dump/logge les flux (audit voix)
     MicSource micSource;      // micro PTT : device (défaut) ou PC
+    VoiceOutMode voiceOutMode; // TTS : off (défaut), device, ou pc
+    VoiceLang voiceLang;      // langue de la voix TTS : fr (défaut) ou en
     uint8_t ledBrightness;    // LED brightness: 16, 32, 64, 128, or 255
     DeviceModel model;        // Active model
     bool demoMode;            // true = demo mode (autonomous animations, no PC required)
@@ -71,6 +86,14 @@ public:
     // Bascule la source micro (Device <-> PC)
     void toggleMicSource();
     void toggleDemoMode();
+    
+    // Voice Out mode management
+    void setVoiceOutMode(VoiceOutMode mode);
+    VoiceOutMode cycleVoiceOutMode(bool forward = true);
+    VoiceOutMode getVoiceOutMode() const;
+
+    // Langue de la voix TTS
+    VoiceLang cycleVoiceLang();
     
 private:
     DeviceConfig currentConfig;

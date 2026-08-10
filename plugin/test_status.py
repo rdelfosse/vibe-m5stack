@@ -85,6 +85,11 @@ mock_vibe_core.types.SessionTitleUpdatedEvent = SessionTitleUpdatedEvent
 
 sys.modules['vibe.core'] = mock_vibe_core
 sys.modules['vibe.core.agent_loop'] = mock_vibe_core.agent_loop
+# Un MagicMock « possède » set_approval_callback -> le fail-fast >=2.23 du
+# hook croirait à une vieille API. Stub minimal SANS cet attribut.
+class _AgentLoopStub:
+    act = None
+mock_vibe_core.agent_loop.AgentLoop = _AgentLoopStub
 sys.modules['vibe.core.types'] = mock_vibe_core.types
 sys.modules['vibe.core.tools'] = mock_vibe_core.tools
 sys.modules['vibe.core.tools.permissions'] = mock_vibe_core.tools.permissions

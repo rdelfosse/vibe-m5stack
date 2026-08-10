@@ -14,7 +14,8 @@ enum class VoiceAckState { TRANSCRIBING, DONE };
 
 enum class MessageType {
     INVALID, APPROVAL_REQUEST, APPROVAL_RESPONSE, PING, ACK,
-    CREDIT_INFO, STATUS, VOICE, VOICE_ACK
+    CREDIT_INFO, STATUS, VOICE, VOICE_ACK,
+    TTS_AUDIO, TTS_END, TTS_STOP
 };
 
 #define WATCHDOG_DEAD_MS   12000
@@ -23,7 +24,8 @@ enum class MessageType {
 
 enum class ApprovalResponse { NONE, APPROVED, REJECTED, CANCELLED };
 
-#define JSON_RX_SIZE 512
+// 4 Ko : doit contenir un chunk tts_audio (~1,4 Ko de base64) + les clés.
+#define JSON_RX_SIZE 4096
 #define JSON_TX_SIZE 256
 
 class SerialProtocol {
@@ -53,6 +55,12 @@ public:
     bool hasThinkingActivity() const;
     VoiceAckState getVoiceAckState() const;
     const char* getVoiceAckText() const;
+    // TTS getters
+    uint32_t getTtsSeq() const;
+    uint32_t getTtsTotal() const;
+    const uint8_t* getTtsData() const;
+    size_t getTtsDataLen() const;
+    bool hasTtsAudio() const;
 private:
     StaticJsonDocument<JSON_RX_SIZE> rxDoc;
     StaticJsonDocument<JSON_TX_SIZE> txDoc;
@@ -72,4 +80,17 @@ private:
     VoiceAckState lastVoiceAckState;
     char lastVoiceAckText[61];
     bool voiceAckValid;
+    // TTS streaming state
+    uint32_t lastTtsSeq;
+    uint32_t lastTtsTotal;
+    char lastTtsData[1025];  // base64 decoded data buffer (~1 Ko raw µ-law)
+    size_t lastTtsDataLen;
+    bool ttsAudioValid;
 };
+
+// Télémétrie de diagnostic TTS (définie dans protocol.cpp).
+extern uint32_t g_ttsChunksOk;
+extern uint32_t g_ttsBytesOk;
+extern uint32_t g_ttsDecodeErrors;
+extern uint32_t g_rxParseErrors;
+extern uint32_t g_rxOversized;

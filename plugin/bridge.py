@@ -95,6 +95,8 @@ class M5StackBridge:
         # both call send() on the same persistent connection.
         self._write_lock = threading.Lock()
         self.firmware_version: Optional[str] = None
+        self.voice_out_mode: Optional[str] = None  # "off", "device", or "pc"
+        self.voice_lang: Optional[str] = None      # "fr" ou "en" (menu device)
 
         if auto_connect:
             self.connect()
@@ -240,17 +242,38 @@ class M5StackBridge:
                                     self.firmware_version = msg.get("fw")
                                     if "debug" in msg:
                                         self._apply_debug_flag(msg.get("debug"))
+                                    if "vout" in msg:
+                                        self._apply_vout_mode(msg.get("vout"))
+                                    if "vlang" in msg:
+                                        self._apply_voice_lang(msg.get("vlang"))
                                     continue
-                                # État de config poussé par le device (menu Debug)
+                                # État de config poussé par le device (menu Debug / Voice Out)
                                 if isinstance(msg, dict) and msg.get("type") == "config":
                                     if "debug" in msg:
                                         self._apply_debug_flag(msg.get("debug"))
+                                    if "vout" in msg:
+                                        self._apply_vout_mode(msg.get("vout"))
+                                    if "vlang" in msg:
+                                        self._apply_voice_lang(msg.get("vlang"))
                                     continue
                                 # Route voice/audio messages directly to voice handler
                                 if isinstance(msg, dict) and msg.get("type") in (
                                     "voice", "audio", "audio_end"
                                 ):
                                     self._handle_voice_message(msg)
+                                    continue
+                                # Télémétrie TTS du device : à logger tel quel.
+                                if isinstance(msg, dict) and msg.get("type") == "tts_diag":
+                                    logger.info(f"TTS diag (device): {msg}")
+                                    continue
+                                # Le device coupe la lecture TTS (bouton) :
+                                # stopper le stream côté PC aussi.
+                                if isinstance(msg, dict) and msg.get("type") == "tts_stop":
+                                    try:
+                                        from plugin import tts_handler
+                                        tts_handler.stop_playback()
+                                    except Exception as e:
+                                        logger.warning(f"tts_stop routing failed: {e}")
                                     continue
                                 self.message_queue.put(msg)
                             except json.JSONDecodeError:
@@ -306,6 +329,26 @@ class M5StackBridge:
                 runtime_flags.set_debug(enabled)
         except Exception as e:
             logger.warning(f"Could not apply debug flag: {e}")
+    
+    def _apply_voice_lang(self, value):
+        """Langue de voix TTS annoncée par le device (menu Voice Lang)."""
+        if value in ("fr", "en") and value != self.voice_lang:
+            self.voice_lang = value
+            logger.info(f"Voice Lang (device): {value}")
+
+    def _apply_vout_mode(self, value):
+        """Update voice out mode from device announcement.
+
+        Tolère les deux formats (vieux firmwares annonçaient un int).
+        """
+        try:
+            if isinstance(value, int):
+                value = {0: "off", 1: "device", 2: "pc"}.get(value)
+            if value in ("off", "device", "pc"):
+                self.voice_out_mode = value
+                logger.info(f"Voice Out mode (device): {value}")
+        except Exception as e:
+            logger.warning(f"Could not apply vout mode: {e}")
 
     def _handle_voice_message(self, msg):
         """Route les messages voix/audio du device vers le voice handler."""

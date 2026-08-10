@@ -1,32 +1,65 @@
 #include "protocol.h"
 #include "serial_io.h"
 #include <Arduino.h>
+#include <mbedtls/base64.h>
+
+// Télémétrie de diagnostic TTS (remontée au PC à chaque tts_end).
+uint32_t g_ttsChunksOk = 0;
+uint32_t g_ttsBytesOk = 0;
+uint32_t g_ttsDecodeErrors = 0;
+uint32_t g_rxParseErrors = 0;
+uint32_t g_rxOversized = 0;
 
 SerialProtocol::SerialProtocol()
     : lastMessageType(MessageType::INVALID), lastRequestId(0),
       lastCreditPercent(0), creditInfoValid(false), newMessageAvailable(false),
       lastAgentState(AgentState::DONE), lastStatusSeq(0), statusValid(false),
       lastThinkingActivity(ThinkingActivity::REASONING), thinkingActivityValid(false),
-      lastVoiceAckState(VoiceAckState::TRANSCRIBING), voiceAckValid(false) {
+      lastVoiceAckState(VoiceAckState::TRANSCRIBING), voiceAckValid(false),
+      lastTtsSeq(0), lastTtsTotal(0), lastTtsDataLen(0), ttsAudioValid(false) {
     lastTitle[0] = '\0'; lastBody[0] = '\0';
     lastStatusDetail[0] = '\0'; lastVoiceAckText[0] = '\0';
+    lastTtsData[0] = '\0';
 }
 
 void SerialProtocol::begin(uint32_t baud) { bridgeSerialBegin(baud); }
 
 bool SerialProtocol::receive() {
-    static char lineBuf[512]; static size_t lineLen = 0;
-    bool haveLine = false;
-    while (bridgeSerial.available()) {
-        char c = (char)bridgeSerial.read();
-        if (c == '\n' || c == '\r') { if (lineLen > 0) { haveLine = true; break; } }
-        else if (lineLen < sizeof(lineBuf) - 1) { lineBuf[lineLen++] = c; }
-        else { lineLen = 0; }
+    // La queue BT de 512 octets est drainée en continu par la tâche btRxDrain
+    // (voir serial_io.cpp) vers un ring de 16 Ko ; ici on transvase le ring
+    // dans l'accumulateur et on extrait une ligne par appel.
+    static char acc[6144]; static size_t accLen = 0;
+    static char lineBuf[2048];
+
+    while (bridgeRxAvailable() && accLen < sizeof(acc)) {
+        int c = bridgeRxRead();
+        if (c < 0) break;
+        acc[accLen++] = (char)c;
     }
-    if (!haveLine) return false;
-    lineBuf[lineLen] = '\0'; lineLen = 0;
+
+    // Extraire la première ligne complète de l'accumulateur.
+    size_t nl = 0;
+    bool haveLine = false;
+    for (; nl < accLen; nl++) {
+        if (acc[nl] == '\n' || acc[nl] == '\r') { haveLine = true; break; }
+    }
+    if (!haveLine) {
+        if (accLen >= sizeof(acc)) accLen = 0;  // ligne monstrueuse : purge
+        return false;
+    }
+
+    size_t lineLen = (nl < sizeof(lineBuf) - 1) ? nl : 0;  // trop longue : jetée
+    if (nl >= sizeof(lineBuf) - 1) g_rxOversized++;
+    if (lineLen > 0) memcpy(lineBuf, acc, lineLen);
+    lineBuf[lineLen] = '\0';
+    // Consommer la ligne + le(s) délimiteur(s) qui suivent.
+    size_t consume = nl + 1;
+    while (consume < accLen && (acc[consume] == '\n' || acc[consume] == '\r')) consume++;
+    memmove(acc, acc + consume, accLen - consume);
+    accLen -= consume;
+    if (lineLen == 0) return false;
     DeserializationError error = deserializeJson(rxDoc, lineBuf);
-    if (error) return false;
+    if (error) { g_rxParseErrors++; return false; }
     const char* typeStr = rxDoc["type"];
     if (!typeStr) return false;
     if (strcmp(typeStr, "approval") == 0) {
@@ -74,6 +107,36 @@ bool SerialProtocol::receive() {
         const char* text = rxDoc["text"] | "";
         strlcpy(lastVoiceAckText, text, sizeof(lastVoiceAckText));
         voiceAckValid = true; return true;
+    }
+    // TTS streaming messages
+    else if (strcmp(typeStr, "tts_audio") == 0) {
+        lastMessageType = MessageType::TTS_AUDIO;
+        lastTtsSeq = rxDoc["seq"] | 0;
+        const char* dataStr = rxDoc["data"] | "";
+        // Base64 decode the data
+        size_t decodedLen = 0;
+        int result = mbedtls_base64_decode((unsigned char*)lastTtsData, sizeof(lastTtsData) - 1,
+                                         &decodedLen, (const unsigned char*)dataStr, strlen(dataStr));
+        if (result == 0) {
+            lastTtsDataLen = decodedLen;
+            ttsAudioValid = true;
+            g_ttsChunksOk++;
+            g_ttsBytesOk += decodedLen;
+        } else {
+            lastTtsDataLen = 0;
+            ttsAudioValid = false;
+            g_ttsDecodeErrors++;
+        }
+        return true;
+    }
+    else if (strcmp(typeStr, "tts_end") == 0) {
+        lastMessageType = MessageType::TTS_END;
+        lastTtsTotal = rxDoc["total"] | 0;
+        return true;
+    }
+    else if (strcmp(typeStr, "tts_stop") == 0) {
+        lastMessageType = MessageType::TTS_STOP;
+        return true;
     }
     return false;
 }
@@ -136,3 +199,10 @@ ThinkingActivity SerialProtocol::getThinkingActivity() const { return lastThinki
 bool SerialProtocol::hasThinkingActivity() const { return thinkingActivityValid; }
 VoiceAckState SerialProtocol::getVoiceAckState() const { return lastVoiceAckState; }
 const char* SerialProtocol::getVoiceAckText() const { return lastVoiceAckText; }
+
+// TTS getters
+uint32_t SerialProtocol::getTtsSeq() const { return lastTtsSeq; }
+uint32_t SerialProtocol::getTtsTotal() const { return lastTtsTotal; }
+const uint8_t* SerialProtocol::getTtsData() const { return (const uint8_t*)lastTtsData; }
+size_t SerialProtocol::getTtsDataLen() const { return lastTtsDataLen; }
+bool SerialProtocol::hasTtsAudio() const { return ttsAudioValid; }

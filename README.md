@@ -22,7 +22,8 @@ push, écriture fichier critique), un écran s'allume sur le M5Stack avec un cha
 Mistral qui danse et tu valides au bouton — **ou à la voix** : maintiens un
 bouton, parle au device (micro embarqué), Voxtral transcrit. Ton instruction
 démarre un tour dans Vibe, ton commentaire pilote la todo en cours, ta consigne
-motive un refus. LEDs latérales + matrices NeoPixel optionnelles aux ports B/C
+motive un refus. Et l'agent te **répond à voix haute** : la réponse est lue par
+le haut-parleur du Fire (TTS Voxtral, voix FR ou EN au choix). LEDs latérales + matrices NeoPixel optionnelles aux ports B/C
 pour signaler l'attente. Et sans PC, un mode démo transforme le device en vitrine.
 
 > 📝 **Article complet** : [Un bouton physique pour valider les actions des agents IA](https://www.romaindelfosse.fr/blog/m5stack-vibe-bouton-physique-agents-ia/) — contexte, démo et retour d'expérience.
@@ -41,8 +42,8 @@ pour signaler l'attente. Et sans PC, un mode démo transforme le device en vitri
 PC (vibe-m5stack) ── hook Python ──> plugin/  (approbations, statuts, voix -> Voxtral)
                                         │
                             Bluetooth SPP  (ou USB Serial)
-          statuts, approbations, acks  ▼   ▲  réponses boutons + audio µ-law
-                                        │  │  streamé pendant la dictée
+     statuts, approbations, acks,      ▼   ▲  réponses boutons + audio µ-law
+     audio TTS streamé (réponses lues)  │  │  streamé pendant la dictée
                                  M5Stack Fire (firmware/)
                           écran + boutons A/B/C + micro (socle M5GO)
                           + ring LED + (optionnel) NeoMatrix
@@ -114,10 +115,34 @@ La clé API Mistral est résolue comme Vibe la résout (variable `MISTRAL_API_KE
 ou keyring du login navigateur) — rien à configurer en plus. Pas de micro sur le
 device ? Bascule `Mic : PC` dans le menu de configuration.
 
+## 🔊 Écouter les réponses (v0.6.0)
+
+<!-- MEDIA À CAPTURER : docs/images/voice-out.gif — GIF ~20 s : question dictée
+     (A long), l'agent répond dans la TUI ET le Fire lit la réponse à voix
+     haute (pastille bleue à l'écran). Filmer avec le son ! -->
+
+La boucle est bouclée : après ta question dictée, **la réponse de l'agent est
+lue à voix haute par le haut-parleur du Fire** (synthèse Voxtral TTS, streamée
+en G.711 µ-law sur le Bluetooth). Le message est nettoyé avant lecture (blocs de
+code et markdown retirés) et lu **en intégralité** — n'importe quel bouton
+interrompt la lecture, et une nouvelle dictée (A long) la coupe aussi.
+
+Deux réglages au menu de configuration :
+
+- **Voice Out** : `Off` (défaut) / `Device` (haut-parleur du Fire) / `PC` ;
+- **Voice Lang** : `FR` (voix Marie, défaut) / `EN` (voix Jane) — appliqué à la
+  lecture suivante, sans redémarrage.
+
+> 🔧 Sous le capot, le haut-parleur du Fire a donné du fil à retordre : queue
+> Bluetooth de 512 octets qui jette les octets en plein stream, horloge du DAC
+> 5,5× trop rapide et impossible à ralentir sous 22 kHz (compensée par
+> suréchantillonnage), calibration à chaque lecture… Le détail est dans les
+> messages de commit de la branche `feat/tts-voice-out`.
+
 ## 🎛️ Menu de configuration
 
 <!-- MEDIA À CAPTURER : docs/images/config-menu.jpg — photo nette de l'écran
-     menu, les 7 items visibles (mettre Demo Mode ON pour l'exemple). -->
+     menu, les 9 items visibles (mettre Demo Mode ON pour l'exemple). -->
 <p align="center">
   <img src="docs/images/config-menu.jpg" width="60%" alt="Menu de configuration du device : Quiet Mode, LED Brightness, Model, Demo Mode, Debug, Mic, Exit">
 </p>
@@ -134,6 +159,8 @@ réglages sont persistés (NVS) :
 | **Demo Mode** | Vitrine autonome au boot sans PC (section suivante) |
 | **Debug** | Audit des flux voix côté PC (dump `last_ptt.wav` + logs) — OFF par défaut |
 | **Mic** | Source du push-to-talk : **Device** (défaut) ou PC |
+| **Voice Out** | Lecture vocale des réponses : **Off** (défaut), Device ou PC |
+| **Voice Lang** | Voix TTS : **FR** (défaut) ou EN |
 
 ## 🎬 Mode démo
 

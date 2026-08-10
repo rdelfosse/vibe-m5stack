@@ -178,3 +178,28 @@ def save_detected_port(port: str, transport: str = "usb") -> None:
     config["device"]["port"] = port
     config["device"]["transport"] = transport
     save_config(config)
+
+
+def get_voice_out_mode() -> str:
+    """
+    Get Voice Out mode from config.
+    
+    Returns:
+        str: "off", "device", or "pc"
+    """
+    config = load_config()
+    return config.get("voice_out", {}).get("mode", "off")
+
+
+def set_voice_out_mode(mode: str) -> None:
+    """
+    Set Voice Out mode in config.
+    
+    Args:
+        mode: "off", "device", or "pc"
+    """
+    config = load_config()
+    if "voice_out" not in config:
+        config["voice_out"] = {}
+    config["voice_out"]["mode"] = mode
+    save_config(config)
