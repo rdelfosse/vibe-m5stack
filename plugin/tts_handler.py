@@ -53,9 +53,11 @@ TARGET_FORMAT = "ulaw"  # G.711 µ-law
 # ⚠️ Une ligne tts_audio arrive au device en UN événement SPP, et la queue RX
 # de BluetoothSerial fait 512 octets : la ligne entière (JSON + base64) doit
 # tenir dessous, sinon la fin de CHAQUE chunk est jetée par le callback.
-# 256 o de µ-law → ~390 o de ligne. 256/0.015 ≈ 17 Ko/s > 16 Ko/s temps réel.
+# 256 o de µ-law → ~390 o de ligne. 256/0.016 = 16 Ko/s : EXACTEMENT le temps
+# réel — plus vite, le buffer device (10 s max) finit par saturer sur les
+# lectures longues (intégrale) ; le pré-buffer de 1,5 s absorbe la gigue.
 CHUNK_SIZE = 256
-PACING_INTERVAL = 0.015
+PACING_INTERVAL = 0.016
 
 
 class VoiceOutMode(Enum):
@@ -132,20 +134,22 @@ def is_tts_available() -> bool:
     return _has_mistralai() and _has_api_key()
 
 
-def clean_and_truncate_text(text: str, max_chars: int = 500) -> str:
+def clean_and_truncate_text(text: str, max_chars: int = 4000) -> str:
     """
-    Clean and truncate text for TTS (P2).
-    
+    Clean text for TTS (P2 — lecture intégrale, décision rdelfosse 2026-08-10).
+
     - Remove markdown formatting
     - Remove code blocks
-    - Truncate at first paragraph or ~max_chars, whichever comes first
-    
+    - max_chars est un GARDE-FOU technique (timeout de synthèse 30 s, limites
+      API), pas une limite produit : 4000 car. ≈ 4 min de parole. Un appui
+      bouton interrompt la lecture à tout moment (P3).
+
     Args:
         text: The raw assistant message
-        max_chars: Maximum characters to keep (default: 500)
-        
+        max_chars: Plafond de sécurité (default: 4000)
+
     Returns:
-        Cleaned and truncated text
+        Cleaned text
     """
     if not text:
         return ""
@@ -668,9 +672,11 @@ async def speak_text(text: str, broker_mgr=None, vibe_config=None) -> bool:
         logger.info(f"Synthesizing speech: {clean_text[:60]}...")
         t0 = time.monotonic()
         try:
-            result = await asyncio.wait_for(tts.speak(clean_text), timeout=30.0)
+            # 120 s : la lecture intégrale envoie jusqu'à 4000 car. — la
+            # synthèse d'un texte long dépasse largement les 30 s initiaux.
+            result = await asyncio.wait_for(tts.speak(clean_text), timeout=120.0)
         except asyncio.TimeoutError:
-            logger.error("TTS speak() timeout (30 s)")
+            logger.error("TTS speak() timeout (120 s)")
             return False
         except asyncio.CancelledError:
             logger.info("TTS annulé (nouveau tour ou stop)")

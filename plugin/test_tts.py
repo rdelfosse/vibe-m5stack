@@ -19,9 +19,13 @@ from plugin.tts_handler import (
 
 # -- Nettoyage / troncature (P2) ----------------------------------------------
 
-def test_truncate_caps_at_500_chars():
+def test_reads_full_text_up_to_safety_cap():
+    # Lecture intégrale (révision P2 du 2026-08-10) : un texte de 2000 car.
+    # passe entier ; seul le garde-fou technique de 4000 car. tronque.
     out = clean_and_truncate_text("mot " * 500)
-    assert len(out) <= 505  # ~500 + ellipse (« ... »), cf. brief P2
+    assert len(out) == 1999
+    out_long = clean_and_truncate_text("mot " * 2000)
+    assert len(out_long) <= 4005  # 4000 + ellipse
 
 
 def test_code_blocks_are_stripped():
