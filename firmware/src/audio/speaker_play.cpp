@@ -72,6 +72,19 @@ static void i2sWriterTask(void* arg) {
     constexpr size_t PCM_SAMPLES = 128;
     static uint16_t pcmBuffer[PCM_SAMPLES];  // non signé : format du DAC intégré
 
+    // PRÉ-BUFFER : ne pas commencer à jouer avant ~1,5 s d'audio (ou fin de
+    // flux). Le PC envoie 64 ms d'audio par 60 ms : partir immédiatement
+    // laisse le buffer au bord du vide et chaque micro-retard BT injecte du
+    // silence entre les vrais échantillons -> hachage continu (le symptôme
+    // « grésillement long de la durée du wav »). L'entrée étant légèrement
+    // plus rapide que la sortie, après le pré-buffer la famine ne revient pas.
+    while (s_active && !s_finishing) {
+        size_t buffered = (s_writePos >= s_readPos) ? (s_writePos - s_readPos)
+                                                    : (s_bufferSize - s_readPos + s_writePos);
+        if (buffered >= SPEAKER_SAMPLE_RATE * 3 / 2) break;   // 1,5 s
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
     while (s_active) {
         size_t available = (s_writePos >= s_readPos) ? (s_writePos - s_readPos)
                                                      : (s_bufferSize - s_readPos + s_writePos);
@@ -269,8 +282,11 @@ void speakerPlayTestTone() {
         if (idx == sizeof(chunk)) { speakerPlayFeed(chunk, idx); idx = 0; }
     }
     if (idx > 0) speakerPlayFeed(chunk, idx);
-    vTaskDelay(pdMS_TO_TICKS(600));
-    speakerPlayStop();
+    // Fin de flux : la tâche saute le pré-buffer, joue tout et s'arrête seule.
+    speakerPlayFinish();
+    for (int i = 0; i < 100 && speakerPlayIsPlaying(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 }
 
 void speakerPlayStop() {
