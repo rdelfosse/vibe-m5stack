@@ -116,8 +116,12 @@ static void calibrateDacClock() {
                            ? effective - SPEAKER_SAMPLE_RATE
                            : SPEAKER_SAMPLE_RATE - effective;
         if (err <= SPEAKER_SAMPLE_RATE * 3 / 100) break;
+        // Plancher BAS assumé : l'horloge tourne 5,5× trop vite (mesuré :
+        // req 16000 → eff 88397), la cible réelle est ~2900 Hz demandés.
+        // L'ancien plancher de 4000 bloquait la convergence à 22 kHz
+        // effectifs = voix 1,38× trop rapide.
         uint64_t next = (uint64_t)requested * SPEAKER_SAMPLE_RATE / effective;
-        if (next < 4000) next = 4000;
+        if (next < 1000) next = 1000;
         if (next > 48000) next = 48000;
         if ((uint32_t)next == requested) break;  // clampé/quantifié : stop
         requested = (uint32_t)next;
