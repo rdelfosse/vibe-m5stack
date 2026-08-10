@@ -174,18 +174,17 @@ def clean_and_truncate_text(text: str, max_chars: int = 500) -> str:
     # Remove HTML tags - preserve surrounding spaces
     text = re.sub(r'<[^>]+>', ' ', text)
     
-    # Collapse multiple spaces and newlines
-    text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces -> single space
-    text = re.sub(r'\n{2,}', '\n\n', text)  # Multiple newlines -> double newline
-    
-    # Remove leading/trailing whitespace
-    text = text.strip()
-    
-    # Truncate at first paragraph (double newline) or max_chars
-    first_paragraph_end = text.find('\n\n')
-    if first_paragraph_end != -1:
-        text = text[:first_paragraph_end]
-    
+    # Puces et marqueurs de liste : à l'oral ils ne se lisent pas.
+    text = re.sub(r'[•▪◦‣]', ' ', text)
+    text = re.sub(r'^\s*[-*]\s+', ' ', text, flags=re.MULTILINE)
+    # Titres markdown (# ...)
+    text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+
+    # Tout aplatir en une seule ligne : la limite est max_chars, PAS le
+    # premier paragraphe — une réponse structurée (intro + liste) ne doit
+    # pas être réduite à sa phrase d'introduction.
+    text = re.sub(r'\s+', ' ', text).strip()
+
     # Truncate to max_chars
     if len(text) > max_chars:
         # Try to truncate at sentence boundary
