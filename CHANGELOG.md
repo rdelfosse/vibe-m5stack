@@ -10,6 +10,39 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-10
+
+### Ajouté
+- **Réponses vocales (TTS Voxtral)** : la réponse finale de l'agent est lue à
+  voix haute par le haut-parleur du M5Stack Fire (ou les enceintes du PC)
+  - Menu **Voice Out** : Off (défaut) / Device / PC, persisté en NVS et annoncé
+    au PC (pings + messages config)
+  - Menu **Voice Lang** : FR (voix `fr_marie_neutral`, défaut) / EN
+    (`gb_jane_neutral`) — changement de voix appliqué à la lecture suivante
+  - **Lecture intégrale** du message (révision P2 du 2026-08-10) : nettoyage
+    markdown/blocs de code, garde-fou technique à 4000 caractères ; n'importe
+    quel bouton interrompt la lecture, une nouvelle dictée (A long) aussi
+  - Audio G.711 µ-law 16 kHz streamé en chunks base64 sur Bluetooth SPP,
+    pré-buffer 1,5 s, normalisation crête ~90 %, passe-bas anti-repliement
+    avant décimation 24→16 kHz
+  - Télémétrie `tts_diag` : le device remonte au PC chunks/octets reçus et
+    erreurs de parse à chaque fin de stream (visible dans le log du hook)
+
+### Corrigé
+- **Queue Bluetooth SPP de 512 octets** : le callback jetait des octets en
+  plein stream TTS (« RX Full! Discarding ») — drainage continu par une tâche
+  dédiée (core 1, 1 ms) vers un ring de 16 Ko + chunks PC ≤ 390 octets
+- **Horloge I2S-DAC 5,5× trop rapide** (minimum réel ~22 kHz, chaotique sous
+  4 kHz demandés) : compensation par duplication d'échantillons (ZOH) avec
+  ratio mesuré à chaque lecture — c'était la voix « accélérée »
+- **Pacing d'envoi** : échéances absolues (asyncio.sleep(15 ms) dort ~21 ms
+  sous Windows → buffer à sec, voix hachée) ; débit calé à 16 Ko/s exactement
+- **Appuis résiduels** : un front bouton antérieur à la lecture la tuait à la
+  première frame ; purge au démarrage de lecture + le PC notifie le device
+  quand il annule un stream + watchdog 12 s sans données
+- **RX multi-messages** : jusqu'à 12 messages traités par itération de loop()
+  (une ligne par tour ne suivait pas les ~60 lignes/s d'un stream TTS)
+
 ## [0.5.1] - 2026-08-09
 
 ### Changé

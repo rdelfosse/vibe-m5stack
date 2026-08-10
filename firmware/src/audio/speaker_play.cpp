@@ -114,8 +114,6 @@ static void calibrateDacClock() {
     // dupliqué eff/16000 fois à l'alimentation (suréchantillonnage ZOH,
     // inaudible : le DAC produit le même escalier qu'à 16 kHz natifs).
     uint32_t effective = measureEffectiveRate();
-    Serial.printf("[cal] eff=%u dup=%.3f\n", (unsigned)effective,
-                  effective ? (double)effective / SPEAKER_SAMPLE_RATE : 0.0);  // DIAG TEMPORAIRE
     if (effective == 0) return;                       // mesure ratée : garder l'ancien ratio
     float ratio = (float)effective / SPEAKER_SAMPLE_RATE;
     if (ratio < 1.0f) ratio = 1.0f;

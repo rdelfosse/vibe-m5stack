@@ -24,9 +24,6 @@ static uint8_t rxRing[16384];
 static volatile size_t rxHead = 0;
 static volatile size_t rxTail = 0;
 
-// DIAG TEMPORAIRE (retirer avant merge)
-volatile uint32_t g_btDrained = 0;
-
 static void rxDrainTask(void*) {
     for (;;) {
         while (bridgeSerial.available()) {
@@ -35,7 +32,6 @@ static void rxDrainTask(void*) {
             size_t next = (rxHead + 1) % sizeof(rxRing);
             if (next == rxTail) break;  // ring plein : l'octet reste dans la queue BT
             rxRing[rxHead] = (uint8_t)c;
-            g_btDrained = g_btDrained + 1;
             rxHead = next;
         }
         vTaskDelay(pdMS_TO_TICKS(1));

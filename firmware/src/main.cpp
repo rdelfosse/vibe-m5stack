@@ -16,7 +16,6 @@
 #include <mbedtls/base64.h>
 #include "audio/mic_capture.h"
 #include "audio/speaker_play.h"
-#include "audio/voice_sample.h"  // DIAG TEMPORAIRE
 #include "config/config.h"
 #include "config/config_menu.h"
 #include "display/anim.h"
@@ -213,23 +212,6 @@ void setup() {
     serialProtocol.begin(115200);
     buttonManager.update();
 
-    // DIAG TEMPORAIRE (retirer avant merge) : bip, puis 2,5 s de VRAIE voix
-    // Voxtral embarquée — même pipeline que le TTS, zéro maillon PC.
-    // Voix intelligible = le HP sait lire de la voix, point final.
-    speakerPlayTestTone();
-    ::delay(300);
-    {
-        if (speakerPlayStart()) {
-            for (size_t off = 0; off < VOICE_SAMPLE_LEN; off += 1024) {
-                size_t n = (VOICE_SAMPLE_LEN - off > 1024) ? 1024 : (VOICE_SAMPLE_LEN - off);
-                speakerPlayFeed(&VOICE_SAMPLE_ULAW[off], n);
-            }
-            speakerPlayFinish();
-            for (int i = 0; i < 400 && speakerPlayIsPlaying(); i++) {
-                ::delay(10);
-            }
-        }
-    }
 }
 
 // Watchdog alarm function
@@ -629,18 +611,6 @@ void loop() {
         vlangStateAnnounced = true;
         bridgeSerial.printf("{\"type\":\"config\",\"vlang\":\"%s\"}\n",
                             lastAnnouncedVlang == VoiceLang::EN ? "en" : "fr");
-    }
-
-    // DIAG TEMPORAIRE (retirer avant merge) : télémétrie RX sur USB à 1 Hz —
-    // COM7 est libre (bridgeSerial = Bluetooth), observable pendant un stream.
-    static uint32_t lastDiagMs = 0;
-    if (now - lastDiagMs >= 1000) {
-        lastDiagMs = now;
-        Serial.printf("[diag] chunks=%u bytes=%u dec_err=%u parse_err=%u oversz=%u playing=%d vout=%d drained=%u ring=%u lines=%u\n",
-            (unsigned)g_ttsChunksOk, (unsigned)g_ttsBytesOk, (unsigned)g_ttsDecodeErrors,
-            (unsigned)g_rxParseErrors, (unsigned)g_rxOversized,
-            (int)speakerPlayIsPlaying(), (int)configManager.get().voiceOutMode,
-            (unsigned)g_btDrained, (unsigned)bridgeRxAvailable(), (unsigned)g_rxLines);
     }
 
     // Handle serial communication.

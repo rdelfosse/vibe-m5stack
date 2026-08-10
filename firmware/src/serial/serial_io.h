@@ -45,6 +45,3 @@ void bridgeSerialBegin(uint32_t baud);
 // jamais bridgeSerial.available()/read() directement.
 size_t bridgeRxAvailable();
 int bridgeRxRead();  // -1 si vide
-
-// DIAG TEMPORAIRE (retirer avant merge) : octets drainés depuis la queue BT.
-extern volatile uint32_t g_btDrained;
