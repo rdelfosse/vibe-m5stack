@@ -109,15 +109,19 @@ static void i2sWriterTask(void* arg) {
 
         // µ-law -> PCM16 signé -> non signé (le DAC intégré lit les 8 bits
         // hauts d'un échantillon non signé ; du signé brut = distorsion).
+        // Chaque échantillon est DUPLIQUÉ (slots gauche+droit d'une trame).
+        if (toRead > PCM_SAMPLES / 2) toRead = PCM_SAMPLES / 2;
         for (size_t i = 0; i < toRead; i++) {
             int16_t s = ulaw2linear(s_buffer[s_readPos]);
-            pcmBuffer[i] = (uint16_t)(s + 32768);
+            uint16_t u = (uint16_t)(s + 32768);
+            pcmBuffer[2 * i] = u;
+            pcmBuffer[2 * i + 1] = u;
             s_readPos = (s_readPos + 1) % s_bufferSize;
         }
 
         size_t written = 0;
         esp_err_t err = i2s_write(SPEAKER_I2S_PORT, pcmBuffer,
-                                  toRead * sizeof(uint16_t), &written,
+                                  toRead * 2 * sizeof(uint16_t), &written,
                                   100 / portTICK_PERIOD_MS);
         if (err != ESP_OK) {
             break;
@@ -164,8 +168,11 @@ bool speakerPlayStart() {
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_DAC_BUILT_IN);
     cfg.sample_rate = SPEAKER_SAMPLE_RATE;
     cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
-    // Le DAC intégré utilise le canal droit pour GPIO 25
-    cfg.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT;
+    // Trames STÉRÉO : le périphérique consomme 32 bits (G+D) par trame — en
+    // mono il avalait deux échantillons par trame = lecture 2x trop rapide
+    // (la voix embarquée jouait en chipmunk). Chaque échantillon est dupliqué
+    // G/D par la tâche.
+    cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
     // MSB : convention attendue par le DAC intégré (STAND_I2S décale d'un
     // bit l'alignement des échantillons sur les 8 bits utiles du DAC).
     cfg.communication_format = I2S_COMM_FORMAT_STAND_MSB;
@@ -185,6 +192,37 @@ bool speakerPlayStart() {
     // HP du Fire sur GPIO 25 = DAC canal 1 = slot DROIT de l'I2S.
     // (i2s_set_dac_mode attend un i2s_dac_mode_t, pas un i2s_mode_t.)
     i2s_set_dac_mode(I2S_DAC_CHANNEL_RIGHT_EN);
+    // Ré-activer explicitement le DAC : après un uninstall (cycle précédent
+    // ou passage micro), le routage ne survit pas toujours au réinstall.
+    dac_output_enable(DAC_CHANNEL_1);
+
+    // AUTO-CALIBRATION (une fois par boot) : l'horloge I2S-DAC ne respecte
+    // pas la fréquence demandée (facteur 2-5x selon la config — même famille
+    // de quirks que l'ADC côté micro). On chronomètre l'écriture de silence
+    // (i2s_write bloque au rythme réel du DMA) et on corrige le sample rate.
+    static uint32_t s_calibratedRate = 0;
+    if (s_calibratedRate == 0) {
+        static uint16_t sil[256];
+        for (size_t i = 0; i < 256; i++) sil[i] = 0x8000;
+        uint32_t t0 = millis();
+        size_t frames = 0;
+        while (frames < 16000) {   // 1 s nominal de trames stéréo
+            size_t written = 0;
+            i2s_write(SPEAKER_I2S_PORT, sil, sizeof(sil), &written, portMAX_DELAY);
+            frames += written / 4;  // 4 octets par trame stéréo 16 bits
+        }
+        uint32_t dt = millis() - t0;
+        if (dt > 50) {
+            uint32_t effective = 16000UL * 1000UL / dt;          // trames/s réelles
+            uint32_t corrected = (uint32_t)((16000.0f * 16000.0f) / effective);
+            if (corrected < 4000) corrected = 4000;
+            if (corrected > 48000) corrected = 48000;
+            s_calibratedRate = corrected;
+        } else {
+            s_calibratedRate = SPEAKER_SAMPLE_RATE;  // mesure aberrante : brut
+        }
+    }
+    i2s_set_sample_rates(SPEAKER_I2S_PORT, s_calibratedRate);
     
     // Démarrer la tâche de lecture
     s_active = true;
