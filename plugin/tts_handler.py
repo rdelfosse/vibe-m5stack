@@ -252,6 +252,20 @@ def wav_to_pcm16(wav_data: bytes) -> tuple[bytes, int, int, int]:
     return frames, sample_rate, channels, sample_width
 
 
+def _normalize_peak(pcm_values):
+    """Normalisation crête à ~90 % de la pleine échelle.
+
+    Le DAC du Fire n'a que 8 bits : un signal à mi-échelle joue moins fort
+    ET gaspille de la résolution (voix plus granuleuse). Gain plafonné à 8x
+    pour ne pas amplifier un passage quasi silencieux en souffle.
+    """
+    peak = max((abs(v) for v in pcm_values), default=0)
+    if not 0 < peak < 29000:
+        return pcm_values
+    gain = min(29500 / peak, 8.0)
+    return [max(-32768, min(32767, int(v * gain))) for v in pcm_values]
+
+
 def pcm16_to_ulaw_16k(pcm_data: bytes, current_rate: int, current_channels: int) -> bytes:
     """
     Convert PCM16 to G.711 µ-law 16 kHz mono.
@@ -267,7 +281,7 @@ def pcm16_to_ulaw_16k(pcm_data: bytes, current_rate: int, current_channels: int)
     # If already 16kHz mono, just convert
     if current_rate == TARGET_SAMPLE_RATE and current_channels == TARGET_CHANNELS:
         # Convert PCM16 to u-law
-        pcm_values = struct.unpack(f'<{len(pcm_data) // 2}h', pcm_data)
+        pcm_values = _normalize_peak(struct.unpack(f'<{len(pcm_data) // 2}h', pcm_data))
         ulaw_bytes = bytes([_pcm16_to_ulaw(pcm) for pcm in pcm_values])
         return ulaw_bytes
     
@@ -283,6 +297,8 @@ def pcm16_to_ulaw_16k(pcm_data: bytes, current_rate: int, current_channels: int)
             mono_values.append(int(sum(channel_samples) / len(channel_samples)))
         pcm_values = mono_values
     
+    pcm_values = _normalize_peak(pcm_values)
+
     # Resample to 16 kHz if needed
     if current_rate != TARGET_SAMPLE_RATE:
         import math
