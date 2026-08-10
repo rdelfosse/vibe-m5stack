@@ -255,6 +255,42 @@ def wav_to_pcm16(wav_data: bytes) -> tuple[bytes, int, int, int]:
     return frames, sample_rate, channels, sample_width
 
 
+def _lowpass_fir(pcm_values, current_rate, target_rate):
+    """Passe-bas anti-repliement avant décimation (sinc fenêtré, 15 taps).
+
+    Sans lui, l'interpolation 24→16 kHz replie le contenu > 8 kHz dans la
+    bande audible — c'est le timbre « métallique/électronique » entendu sur
+    le HP du Fire. Coupure à ~0,45 × le débit cible.
+    """
+    import math
+    if current_rate <= target_rate or len(pcm_values) < 32:
+        return pcm_values
+    fc = 0.45 * target_rate / current_rate  # fréquence normalisée (0..0.5)
+    n_taps = 15
+    mid = n_taps // 2
+    taps = []
+    for i in range(n_taps):
+        x = i - mid
+        h = 2 * fc if x == 0 else math.sin(2 * math.pi * fc * x) / (math.pi * x)
+        h *= 0.54 - 0.46 * math.cos(2 * math.pi * i / (n_taps - 1))  # Hamming
+        taps.append(h)
+    s = sum(taps)
+    taps = [t / s for t in taps]
+    n = len(pcm_values)
+    out = [0] * n
+    for i in range(n):
+        acc = 0.0
+        for j, t in enumerate(taps):
+            k = i + j - mid
+            if k < 0:
+                k = 0
+            elif k >= n:
+                k = n - 1
+            acc += t * pcm_values[k]
+        out[i] = int(acc)
+    return out
+
+
 def _normalize_peak(pcm_values):
     """Normalisation crête à ~90 % de la pleine échelle.
 
@@ -301,6 +337,7 @@ def pcm16_to_ulaw_16k(pcm_data: bytes, current_rate: int, current_channels: int)
         pcm_values = mono_values
     
     pcm_values = _normalize_peak(pcm_values)
+    pcm_values = _lowpass_fir(pcm_values, current_rate, TARGET_SAMPLE_RATE)
 
     # Resample to 16 kHz if needed
     if current_rate != TARGET_SAMPLE_RATE:
