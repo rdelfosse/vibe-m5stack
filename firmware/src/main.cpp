@@ -86,6 +86,7 @@ static bool voiceMicDevice = false;   // session en cours : micro embarqué ?
 // Annonces de config au PC (debug / voice out) : en portée fichier pour être
 // ré-armées par le handler RX après un silence (session PC redémarrée).
 static bool debugStateAnnounced = false;
+static uint32_t lastTtsFeedMs = 0;
 static bool lastAnnouncedDebug = false;
 static bool voutStateAnnounced = false;
 static VoiceOutMode lastAnnouncedVout = VoiceOutMode::OFF;
@@ -339,6 +340,15 @@ void loop() {
     // déclencher l'action normale. ⚠️ wasPressed() est DESTRUCTIF : ne
     // l'appeler QUE pendant une lecture — la v1 le faisait à chaque frame et
     // mangeait tous les fronts du firmware (menu, approbations… gelés).
+    // Watchdog lecture : si le PC annule un stream sans prévenir (ou que le
+    // lien tombe), le buffer se vide et la lecture attendrait pour toujours
+    // (pastille qui clignote à vide). 12 s sans feed > max bufferisable
+    // (10 s) : on libère.
+    if (speakerPlayIsPlaying() && now - lastTtsFeedMs > 12000) {
+        speakerPlayStop();
+        speakerPlayRelease();
+    }
+
     if (speakerPlayIsPlaying()) {
         bool anyPress = false;
         for (int i = 0; i < 3; i++) {
@@ -672,8 +682,16 @@ void loop() {
                 if (len > 0) {
                     if (!speakerPlayIsPlaying()) {
                         speakerPlayStart();
+                        // Purger les appuis en attente : un front accumulé
+                        // AVANT la lecture (approbation, frôlement pendant le
+                        // thinking) déclenchait le bloc « bouton = stop » dès
+                        // la première frame et tuait le stream à sa naissance.
+                        for (int i = 0; i < 3; i++) {
+                            (void)buttonManager.wasPressed(static_cast<AppButton>(i));
+                        }
                     }
                     speakerPlayFeed(data, len);
+                    lastTtsFeedMs = now;
                 }
             }
         }

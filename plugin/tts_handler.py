@@ -545,6 +545,13 @@ async def stream_to_device(audio_data: bytes, broker_mgr) -> bool:
             # sans ce check, un stream de 30 s continuerait dans le vide.
             if _state.cancel_event.is_set():
                 logger.info(f"TTS stream cancelled at chunk {seq}/{_state.total_chunks}")
+                # Prévenir le device : sans ce stop, les chunks déjà en vol
+                # REDÉMARRENT la lecture qui attend ensuite des données pour
+                # toujours (pastille qui clignote à vide).
+                try:
+                    broker_mgr.broker.bridge.send({"type": "tts_stop"})
+                except Exception:
+                    pass
                 return False
             start = seq * chunk_size
             end = min((seq + 1) * chunk_size, total_size)
