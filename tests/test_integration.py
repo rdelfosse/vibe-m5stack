@@ -24,10 +24,6 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock, patch, AsyncMock
 
-# Add plugin to path
-_PLUGIN_DIR = Path(__file__).parent.resolve()
-sys.path.insert(0, str(_PLUGIN_DIR))
-
 # Import the hook BEFORE importing vibe modules
 import plugin.vibe_m5stack_hook as hook_module
 
@@ -37,20 +33,21 @@ from vibe.core.types import ApprovalResponse
 
 
 async def test_agent_loop_patching():
-    """Test that AgentLoop.set_approval_callback is properly patched."""
-    
-    # Verify the patch is in place
-    assert hook_module._original_set_approval_callback is not None
-    assert AgentLoop.set_approval_callback is not hook_module._original_set_approval_callback
-    print("+ AgentLoop.set_approval_callback is patched")
+    """Test that AgentLoop.act is properly patched for status + approval race."""
+    from vibe.core.agent_loop import AgentLoop
+
+    # L'import du hook installe patched_act (wrapper de act) sur la classe.
+    assert getattr(AgentLoop.act, "__name__", "") == "patched_act"
+    print("+ AgentLoop.act is patched")
 
 
 async def test_vibe_app_patching():
-    """Test that VibeApp.on_mount is properly patched."""
-    
-    # Verify the patch is in place
-    assert hook_module._patched_vibe_app is True
-    print("+ VibeApp.on_mount is patched")
+    """Test that VibeApp.__init__ is wrapped to capture the TUI instance."""
+    from vibe.cli.textual_ui.app import VibeApp
+
+    # _patch_tui_capture() enveloppe __init__ via captured_init.
+    assert getattr(VibeApp.__init__, "__name__", "") == "captured_init"
+    print("+ VibeApp.__init__ is patched")
 
 
 async def test_callback_with_mock_bridge():
@@ -108,29 +105,33 @@ async def test_callback_with_mock_bridge():
 
 
 async def test_callback_error_handling():
-    """Test that the callback handles errors properly."""
+    """Test that the callback degrades gracefully when bridge init fails.
+
+    En >= 2.23, un échec d'init du bridge fait retourner None à
+    m5stack_approval_callback : la course _race_m5stack_approval ne résout
+    alors RIEN et laisse la modal TUI native gérer seule (fallback).
+    """
     from pydantic import BaseModel
-    
+
     callback = hook_module.m5stack_approval_callback
-    
+
     class MockArgs(BaseModel):
         path: str = "/test/file.txt"
-    
+
     # Set bridge to None to trigger initialization
     hook_module._bridge = None
-    
-    # Mock M5StackBridge to raise error
-    with patch('plugin.vibe_m5stack_hook.M5StackBridge', side_effect=Exception("Test error")):
+
+    with patch.object(hook_module, "get_or_init_broker", return_value=None), \
+         patch('plugin.vibe_m5stack_hook.M5StackBridge', side_effect=Exception("Test error")):
         result = await callback(
             tool_name="write_file",
             args=MockArgs(),
             tool_call_id="test-123",
             required_permissions=None
         )
-    
-    assert result[0] == ApprovalResponse.NO
-    assert "error" in result[1].lower()
-    print("+ Callback handles bridge errors properly")
+
+    assert result is None
+    print("+ Callback handles bridge errors properly (returns None, TUI fallback)")
 
 
 async def main():

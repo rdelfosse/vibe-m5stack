@@ -26,18 +26,6 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Mock the bridge before importing
-import sys
-mock_bridge_module = MagicMock()
-mock_bridge_class = MagicMock()
-mock_bridge_instance = MagicMock()
-mock_bridge_instance.send.return_value = True
-mock_bridge_instance.is_connected.return_value = True
-mock_bridge_class.return_value = mock_bridge_instance
-mock_bridge_module.M5StackBridge = mock_bridge_class
-
-sys.modules['plugin.bridge'] = mock_bridge_module
-
 from plugin.broker import (
     OwnerBroker,
     ClientProxy,

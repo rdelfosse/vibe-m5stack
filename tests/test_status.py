@@ -22,16 +22,10 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from typing import Any
 
-# Mock vibe core modules before importing
-import sys
-
-mock_vibe_core = MagicMock()
-mock_vibe_core.agent_loop = MagicMock()
-mock_vibe_core.types = MagicMock()
-mock_vibe_core.tools = MagicMock()
-mock_vibe_core.tools.permissions = MagicMock()
-
-# Define mock event classes
+# map_event_to_status ne dépend que du NOM de la classe de l'événement et de
+# l'attribut optionnel tool_name : des classes factices locales suffisent,
+# pas besoin de stubber les modules vibe (mistral-vibe est une dépendance
+# dure du plugin).
 class MockEvent:
     pass
 
@@ -69,30 +63,6 @@ class PlanReviewRequestedEvent(MockEvent):
 
 class SessionTitleUpdatedEvent(MockEvent):
     pass
-
-# Set up mocks
-mock_vibe_core.types.UserMessageEvent = UserMessageEvent
-mock_vibe_core.types.AssistantEvent = AssistantEvent
-mock_vibe_core.types.ReasoningEvent = ReasoningEvent
-mock_vibe_core.types.ToolCallEvent = ToolCallEvent
-mock_vibe_core.types.ToolResultEvent = ToolResultEvent
-mock_vibe_core.types.ToolStreamEvent = ToolStreamEvent
-mock_vibe_core.types.WaitingForInputEvent = WaitingForInputEvent
-mock_vibe_core.types.CompactStartEvent = CompactStartEvent
-mock_vibe_core.types.CompactEndEvent = CompactEndEvent
-mock_vibe_core.types.PlanReviewRequestedEvent = PlanReviewRequestedEvent
-mock_vibe_core.types.SessionTitleUpdatedEvent = SessionTitleUpdatedEvent
-
-sys.modules['vibe.core'] = mock_vibe_core
-sys.modules['vibe.core.agent_loop'] = mock_vibe_core.agent_loop
-# Un MagicMock « possède » set_approval_callback -> le fail-fast >=2.23 du
-# hook croirait à une vieille API. Stub minimal SANS cet attribut.
-class _AgentLoopStub:
-    act = None
-mock_vibe_core.agent_loop.AgentLoop = _AgentLoopStub
-sys.modules['vibe.core.types'] = mock_vibe_core.types
-sys.modules['vibe.core.tools'] = mock_vibe_core.tools
-sys.modules['vibe.core.tools.permissions'] = mock_vibe_core.tools.permissions
 
 # Now we can import the hook module
 from plugin.vibe_m5stack_hook import map_event_to_status

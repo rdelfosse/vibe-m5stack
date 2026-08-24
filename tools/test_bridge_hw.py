@@ -20,7 +20,7 @@ Test script for M5Stack Bridge
 Run this to test communication with your M5Stack device.
 """
 
-from bridge import M5StackBridge
+from plugin.bridge import M5StackBridge
 import time
 
 

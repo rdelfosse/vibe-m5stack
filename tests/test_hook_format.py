@@ -15,22 +15,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """"""Tests for format_tool_info from plugin.vibe_m5stack_hook."""
 
-import sys
-from unittest.mock import MagicMock
 from pydantic import BaseModel
 
-# Stub modules BEFORE importing vibe_m5stack_hook to prevent side effects
-# The hook does install_hook() at module load which patches AgentLoop
-stub_types = MagicMock()
-stub_types.ApprovalResponse = MagicMock()
-stub_permissions = MagicMock()
-stub_agent_loop = MagicMock()
-
-sys.modules["vibe.core.types"] = stub_types
-sys.modules["vibe.core.tools.permissions"] = stub_permissions
-sys.modules["vibe.core.agent_loop"] = stub_agent_loop
-
-# Now we can safely import the function
+# mistral-vibe >= 2.23 est une dépendance dure : on importe le hook avec les
+# vrais modules vibe. L'auto-install du hook au load ne patche que des
+# classes en mémoire, sans effet de bord matériel.
 from plugin.vibe_m5stack_hook import format_tool_info
 
 
