@@ -158,10 +158,17 @@ class OwnerBroker:
             daemon=True
         )
         self.server_thread.start()
-        
-        # Give it a moment to start
+
+        # Attendre que le serveur écoute RÉELLEMENT : server_port est posé
+        # après start_server() -> à ce moment le socket est bound. Un simple
+        # sleep(0.5) perdait la course sur machine chargée (connect du client
+        # avant le bind -> Connection refused).
         import time
-        time.sleep(0.5)
+        deadline = time.monotonic() + 5.0
+        while self.server_port is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if self.server_port is None:
+            logger.error("Broker server did not start within 5 s")
         
         # Write broker file
         self._write_broker_file()

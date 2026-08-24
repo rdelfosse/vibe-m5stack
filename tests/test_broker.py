@@ -111,22 +111,44 @@ class TestOwnerBroker:
         assert not self.broker.running
 
 
-@pytest.mark.asyncio
-async def test_client_proxy_send_message():
-    """Test ClientProxy message sending."""
-    # Create a mock broker file
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.broker') as f:
-        broker_info = {"port": 12345, "pid": os.getpid()}
-        json.dump(broker_info, f)
-        temp_broker_file = f.name
-    
-    # Mock the read
-    with patch('plugin.broker.BROKER_FILE_PATH', Path(temp_broker_file)):
+def test_client_proxy_connect_reads_broker_file(monkeypatch):
+    """ClientProxy.connect lit le broker file et joint le serveur owner.
+
+    Régression CI : l'ancien test écrivait un faux broker file pointant le
+    port mort 12345 et assertait connect() — ça ne passe que si quelque
+    chose écoute déjà sur 12345 (jamais le cas sur les runners). Ici on
+    démarre un vrai OwnerBroker : start() écrit lui-même le fichier avec
+    son port vivant, le client n'a plus qu'à le lire.
+    """
+    import plugin.broker as broker_module
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        monkeypatch.setattr(
+            broker_module, "BROKER_FILE_PATH", Path(tmp_dir) / "m5stack.broker"
+        )
+        broker = OwnerBroker(MagicMock(), "owner_session")
+        try:
+            port, pid = broker.start()
+
+            client = ClientProxy("test_client")
+            assert client.connect()
+            assert client.owner_port == port
+            assert client.owner_pid == pid
+        finally:
+            broker.close()
+
+
+def test_client_proxy_connect_fails_without_broker_file(monkeypatch):
+    """Sans broker file, connect() retourne False proprement."""
+    import plugin.broker as broker_module
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        monkeypatch.setattr(
+            broker_module, "BROKER_FILE_PATH", Path(tmp_dir) / "absent.broker"
+        )
         client = ClientProxy("test_client")
-        assert client.connect()  # Should read broker file
-    
-    # Cleanup
-    os.unlink(temp_broker_file)
+        assert client.connect() is False
+        assert client.owner_port is None
 
 
 class TestBrokerManager:
