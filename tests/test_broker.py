@@ -77,6 +77,27 @@ class TestOwnerBroker:
         assert self.broker.aggregated_state == "thinking"
         assert self.broker.aggregated_detail == "test"
         assert self.broker.aggregated_seq == 1
+
+    def test_heartbeat_before_first_push_sends_full_status(self):
+        """Régression : aggregated_activity n'était pas initialisé dans
+        __init__ — le premier heartbeat (avant tout push_status) levait une
+        AttributeError avalée en ERROR log, et rien n'allait au device.
+        """
+        self.broker._send_aggregated_status()
+        self.mock_bridge.send.assert_called_once()
+        msg = self.mock_bridge.send.call_args[0][0]
+        assert msg["type"] == "status"
+        assert msg["state"] == "done"
+        assert msg["seq"] == 0
+        # L'activité n'est embarquée que pour l'état thinking
+        assert "activity" not in msg
+
+    def test_thinking_status_includes_activity(self):
+        self.broker.push_status("thinking", "edit foo.py", 3, "tool_exec")
+        self.mock_bridge.send.reset_mock()
+        self.broker._send_aggregated_status()
+        msg = self.mock_bridge.send.call_args[0][0]
+        assert msg["activity"] == "tool_exec"
     
     def test_multiple_status_aggregation(self):
         self.broker.push_status("thinking", "session1", 1)

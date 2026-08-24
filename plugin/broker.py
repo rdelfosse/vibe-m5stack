@@ -109,6 +109,11 @@ class OwnerBroker:
         self.aggregated_state = AgentState.DONE
         self.aggregated_detail = ""
         self.aggregated_seq = 0
+        # Initialisé dès le constructeur : _send_aggregated_status lit cet
+        # attribut (condition ligne suivante) même en état DONE. Sans init,
+        # le premier heartbeat avant tout push_status levait une
+        # AttributeError avalée en ERROR log à chaque démarrage owner.
+        self.aggregated_activity = ""
         self.lock = threading.Lock()
         self.device_lock = threading.Lock()  # Serializes device approval access
         self.running = False
@@ -137,7 +142,14 @@ class OwnerBroker:
             self.server_port = self.server.sockets[0].getsockname()[1]
             logger.info(f"Broker server started on port {self.server_port}")
             async with self.server:
-                await self.server.serve_forever()
+                try:
+                    await self.server.serve_forever()
+                except asyncio.CancelledError:
+                    # Arrêt normal : close() annule serve_forever depuis un
+                    # autre thread. Sans ce catch, le CancelledError sortait
+                    # du thread et polluait les logs (PytestUnhandledThread-
+                    # ExceptionWarning en tests).
+                    pass
         
         self.running = True
         self.server_thread = threading.Thread(
