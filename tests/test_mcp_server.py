@@ -28,9 +28,18 @@ import threading
 from typing import Optional
 
 
-def test_mcp_server():
-    """Test the MCP server by sending a request via stdin."""
-    
+def _mcp_handshake_probe(include_approval: bool = True) -> bool:
+    """Probe du serveur MCP : initialize, tools/list (+ tools/call si
+    `include_approval`).
+
+    Le tools/call request_human_approval exige un M5Stack branché (il bloque
+    en attendant la réponse device) : réservé au mode script. Le test pytest
+    ne couvre que le handshake JSON-RPC, réalisable sans matériel.
+
+    Retourne un bool pour rester utilisable comme script autonome
+    (python -m tests.test_mcp_server). Le test pytest ci-dessous l'encapsule
+    avec un assert (un test doit retourner None).
+    """
     print("Starting MCP server subprocess...")
     
     # Start the MCP server as a subprocess
@@ -56,12 +65,18 @@ def test_mcp_server():
     # Give server time to initialize
     time.sleep(2)
     
-    # Send initialize request
+    # Send initialize request (conforme au protocole MCP : sans
+    # protocolVersion/capabilities/clientInfo, le serveur rejette la requête
+    # avec 30 erreurs de validation pydantic)
     init_request = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
-        "params": {}
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "vibe-m5stack-probe", "version": "0.0.0"},
+        }
     }
     
     print("Sending initialize request...")
@@ -84,6 +99,14 @@ def test_mcp_server():
         print("No initialize response received")
         return False
     
+    # Notification obligatoire avant toute requête suivante (spec MCP)
+    initialized_notification = {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    }
+    proc.stdin.write(json.dumps(initialized_notification) + "\n")
+    proc.stdin.flush()
+
     # List tools
     list_tools_request = {
         "jsonrpc": "2.0",
@@ -101,9 +124,20 @@ def test_mcp_server():
         if line:
             response = json.loads(line)
             print(f"Tools response: {json.dumps(response, indent=2)}")
+            if "error" in response:
+                print(f"Error: {response['error']}")
+                proc.kill()
+                return False
             break
         time.sleep(0.5)
-    
+    else:
+        proc.kill()
+        return False
+
+    if not include_approval:
+        proc.kill()
+        return True
+
     # Call request_human_approval (this will block waiting for M5Stack response)
     print("\nCalling request_human_approval (check your M5Stack)...")
     call_request = {
@@ -135,9 +169,18 @@ def test_mcp_server():
     return False
 
 
+def test_mcp_server():
+    """Handshake JSON-RPC du serveur MCP (initialize + tools/list), sans
+    matériel. La sonde complète avec approbation device reste disponible en
+    mode script : python -m tests.test_mcp_server (M5Stack requis).
+    """
+    assert _mcp_handshake_probe(include_approval=False), \
+        "MCP server handshake failed (see output above)"
+
+
 if __name__ == "__main__":
     try:
-        success = test_mcp_server()
+        success = _mcp_handshake_probe()
         sys.exit(0 if success else 1)
     except KeyboardInterrupt:
         print("\nTest interrupted")

@@ -30,6 +30,24 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
   `AgentLoop.act` (patched_act) et `VibeApp.__init__` (captured_init) au lieu
   des globals `_original_set_approval_callback` / `_patched_vibe_app` supprimés
   en 0.5.1 ; échec d'init bridge attendu = retour None (fallback TUI).
+- **`OwnerBroker.aggregated_activity` non initialisé** (plugin/broker.py) :
+  le premier heartbeat avant tout `push_status` levait une AttributeError
+  avalée en ERROR log (« Failed to send aggregated status ») et rien n'était
+  envoyé au device — à chaque démarrage owner.
+- **Arrêt du serveur broker** : le CancelledError de `serve_forever()` sortait
+  du thread au `close()` (traceback + warning pytest) ; il est maintenant
+  intercepté comme arrêt normal.
+- **Port hardcodé COM8 dans le serveur MCP** (`mcp_server.py`) : ignorait
+  `M5STACK_PORT`/config.toml → inutilisable tel quel sur toute machine dont
+  le device n'est pas sur COM8. Passe par la résolution standard
+  (`config.resolve_port()`), et l'échec de push crédit (device absent)
+  repasse en debug.
+- **Sonde MCP conforme au protocole** : le « test » `test_mcp_server`
+  envoyait un initialize invalide (sans protocolVersion/capabilities/
+  clientInfo, rejeté par le SDK MCP) puis retournait False — que pytest
+  ignorait silencieusement. Le test pytest couvre désormais un vrai handshake
+  JSON-RPC sans matériel ; la sonde complète avec approbation device reste
+  disponible en script (`python -m tests.test_mcp_server`).
 
 ### Ajouté
 - **CI Python** (`.github/workflows/tests.yml`) : pytest sur push main / PR,

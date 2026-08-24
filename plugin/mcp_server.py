@@ -92,28 +92,39 @@ async def send_credit_periodically():
     """Periodically fetch usage % and forward to the M5Stack."""
     while True:
         try:
-            bridge = get_bridge()
             percent = await fetch_credit_usage()
             if percent >= 0:
+                bridge = get_bridge()
                 bridge.send_credit_info(percent)
                 logger.debug(f"Sent credit info: {percent}%")
             # else: leave the M5Stack's last known value alone — gauge will
             # naturally show "N/A" only on cold start when nothing was sent.
         except Exception as e:
-            logger.warning(f"Error in credit task: {e}")
+            # Device absent / port occupé : cas nominal, pas une erreur.
+            logger.debug(f"Credit push skipped ({e})")
 
         # Usage updates server-side at most once per minute; no need to poll faster.
         await asyncio.sleep(60)
 
 
 def get_bridge() -> M5StackBridge:
-    """Lazy serial open: don't touch COM8 until the first tool invocation."""
+    """Lazy serial open: don't touch the port until the first tool invocation.
+
+    Le port suit la résolution standard (M5STACK_PORT > config.toml >
+    auto-detect) — plus de COM8 hardcodé, qui cassait toute machine dont le
+    device n'est pas sur COM8.
+    """
     global _bridge
     if _bridge is None:
-        logger.info("Opening serial bridge to M5Stack on COM8...")
-        _bridge = M5StackBridge(port="COM8", auto_connect=True)
+        from .config import resolve_port
+
+        port = resolve_port()
+        logger.info(f"Opening serial bridge to M5Stack on {port or 'auto-detect'}...")
+        _bridge = M5StackBridge(port=port, auto_connect=port is None)
         if not _bridge.is_connected:
-            raise RuntimeError("M5Stack not reachable on COM8")
+            raise RuntimeError(
+                f"M5Stack not reachable on {port or 'any detected port'}"
+            )
     return _bridge
 
 
