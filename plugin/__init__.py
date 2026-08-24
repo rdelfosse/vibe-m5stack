@@ -25,7 +25,22 @@ Usage:
     approval requests to it. User responds via physical buttons.
 """
 
-__version__ = "0.1.0"
+from pathlib import Path
+
+# Source unique de vérité : le fichier VERSION (pyproject dynamic version).
+# En installé (wheel), la metadata du package fait foi ; en checkout source,
+# on lit directement le fichier. Ne pas hardcoder ici.
+try:
+    from importlib.metadata import PackageNotFoundError, version
+
+    __version__ = version("vibe-m5stack")
+except Exception:
+    try:
+        __version__ = (Path(__file__).resolve().parent.parent / "VERSION").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError:
+        __version__ = "0.0.0"
 
 # Note: Do NOT import bridge/approval at module level to avoid
 # opening serial port prematurely. Use lazy imports instead.

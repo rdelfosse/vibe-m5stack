@@ -10,6 +10,35 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-24
+
+### Corrigé
+- **Suite de tests réparée** : `tests/conftest.py` avait une docstring fusionnée
+  avec l'import (`"""import json`) → SyntaxError, pytest ne collectait plus rien.
+  Les tests hérités de `plugin/test_*.py` importaient `bridge` en module à plat
+  (`ModuleNotFoundError` depuis le passage au package `plugin.`) et étaient
+  masqués par `testpaths = ["tests"]`.
+- **Tests unifiés dans `tests/`** : les 10 fichiers de `plugin/` migrent vers
+  `tests/`, imports fixés sur `plugin.*`. Les stubs `sys.modules["vibe.*"]`
+  (fragiles — l'ordre de collecte pytest décidait qui voit le mock) sont
+  remplacés par les vrais modules `mistral-vibe`, désormais dépendance dure.
+- **Scripts de test reclassifiés** : `plugin/test_bridge.py` (diagnostic
+  matériel, pas un test unitaire) → `tools/test_bridge_hw.py` ;
+  `plugin/test_hook.py` renommé `tests/test_hook_race.py` pour lever
+  l'ambiguïté avec `tests/test_hook_format.py`.
+- **Tests d'intégration mis à jour pour l'API ≥ 2.23** : assertions sur
+  `AgentLoop.act` (patched_act) et `VibeApp.__init__` (captured_init) au lieu
+  des globals `_original_set_approval_callback` / `_patched_vibe_app` supprimés
+  en 0.5.1 ; échec d'init bridge attendu = retour None (fallback TUI).
+
+### Ajouté
+- **CI Python** (`.github/workflows/tests.yml`) : pytest sur push main / PR,
+  matrix Python 3.12 + 3.13. Le workflow firmware passe aussi à Python 3.12.
+
+### Changé
+- **Python 3.12 partout** : README aligné sur `requires-python = ">=3.12"` du
+  pyproject (README et CI mentionnaient encore 3.10).
+
 ## [0.6.0] - 2026-08-10
 
 ### Ajouté

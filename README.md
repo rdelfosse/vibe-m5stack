@@ -202,7 +202,7 @@ un brown-out reset au premier allumage des LEDs.
 <summary><strong>💻 Software requis</strong></summary>
 
 - **PlatformIO Core** (CLI, pas l'IDE) : https://platformio.org/install/cli
-- **Python 3.10+**
+- **Python 3.12+**
 - **Mistral Vibe CLI** installé via `uv tool install mistral-vibe` (https://docs.mistral.ai/)
 - **gh** CLI si tu veux créer le repo GitHub depuis le terminal
 
@@ -676,9 +676,9 @@ plugin/                            Python — pont serial ↔ Vibe
 ├── vibe_m5stack_hook.py           Hook approval + status tracking (monkey-patch AgentLoop)
 ├── vibe_hook.py                   legacy console fallback (avant MCP)
 ├── mcp_server.py                  Server MCP stdio asyncio — optionnel, désactivé par défaut
-├── test_broker.py                 Tests unitaires pour broker
-├── test_status.py                 Tests unitaires pour status tracking
 └── requirements.txt
+
+tests/                             Suite pytest (CI : .github/workflows/tests.yml)
 ```
 
 ### Protocole série

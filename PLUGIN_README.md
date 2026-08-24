@@ -47,7 +47,7 @@ This branch implements a monkey-patching approach that intercepts permission cal
 - `plugin/vibe_m5stack_hook.py` - Core hook that patches `AgentLoop.set_approval_callback`
 - `plugin/__main__.py` - Entry point for `python -m plugin`
 - `vibe-m5stack` - Wrapper script for easy launching
-- `plugin/test_hook.py` - Unit tests
+- `tests/test_hook_race.py` - Unit tests (race approval)
 
 **Characteristics:**
 - ✅ **Keeps 100% of Vibe CLI interface** (Textual TUI, history, autocomplete, syntax highlighting)
@@ -110,9 +110,9 @@ Use **`feat/acp`** for experimentation with the ACP protocol or if you need the 
 
 ## Testing
 
-Run unit tests for the hook:
+Run the full test suite from the repo root:
 ```bash
-python -m plugin.test_hook
+pytest
 ```
 
 All tests should pass without a physical M5Stack device (uses mocks).
