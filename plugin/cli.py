@@ -167,7 +167,7 @@ def check_entrypoints() -> Tuple[bool, str]:
     
     if not missing:
         return True, f"Tous les entrypoints trouvés: {', '.join(found)}"
-    return False, f"Entrypoints manquants: {', '.join(missing)} (exécute: uv tool install --reinstall mistral-vibe --with-editable . --with-executables-from vibe-m5stack)"
+    return False, f"Entrypoints manquants: {', '.join(missing)} (exécute: uv tool install --reinstall 'mistral-vibe>=2.23,<3' --with-editable . --with-executables-from vibe-m5stack)"
 
 
 def check_vibe_importable() -> Tuple[bool, str]:

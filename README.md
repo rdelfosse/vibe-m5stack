@@ -203,7 +203,7 @@ un brown-out reset au premier allumage des LEDs.
 
 - **PlatformIO Core** (CLI, pas l'IDE) : https://platformio.org/install/cli
 - **Python 3.12+**
-- **Mistral Vibe CLI** installé via `uv tool install mistral-vibe` (https://docs.mistral.ai/)
+- **Mistral Vibe CLI 2.x** installé via `uv tool install "mistral-vibe>=2.23,<3"` (https://docs.mistral.ai/)
 - **gh** CLI si tu veux créer le repo GitHub depuis le terminal
 
 </details>
@@ -426,8 +426,13 @@ isolé dans `~\AppData\(Roaming\|Local\)\uv\tools\mistral-vibe\`. Le plugin `vib
 Depuis la racine du repo (le `.` final compte) :
 
 ```bash
-uv tool install --reinstall mistral-vibe --with-editable . --with-executables-from vibe-m5stack
+uv tool install --reinstall "mistral-vibe>=2.23,<3" --with-editable . --with-executables-from vibe-m5stack
 ```
+
+> ⚠️ **La borne `>=2.23,<3` est indispensable.** Le plugin patche des API
+> internes du CLI (`vibe.core.agent_loop`, la TUI Textual) qui ont été
+> supprimées dans Mistral Vibe 3.0.0 — une install non bornée tire la 3.x
+> et le plugin casse silencieusement au runtime.
 
 Cela :
 1. Reconstruit le venv `mistral-vibe`.
