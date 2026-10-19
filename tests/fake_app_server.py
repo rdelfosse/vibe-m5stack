@@ -68,6 +68,22 @@ async def serve() -> None:
         """Un tour factice qui demande une approbation puis se termine."""
         await asyncio.sleep(0.1)
         await peer.notify("turn/started", {"sessionId": SESSION_ID, "eventId": 10})
+        await peer.notify(
+            "history/entryAdded",
+            {
+                "sessionId": SESSION_ID,
+                "eventId": 11,
+                "entry": {"type": "reasoning", "text": "reflexion factice"},
+            },
+        )
+        await peer.notify(
+            "history/entryAdded",
+            {
+                "sessionId": SESSION_ID,
+                "eventId": 12,
+                "entry": {"type": "effect", "title": "file_system.write_file"},
+            },
+        )
         callback = {
             "callbackId": "cb-fake-1",
             "sessionId": SESSION_ID,
@@ -81,7 +97,7 @@ async def serve() -> None:
         ack = await peer.request("callback/call", {"callback": callback})
         record({"event": "callback_ack", "ack": ack.get("result")})
         await asyncio.sleep(0.1)
-        await peer.notify("turn/completed", {"sessionId": SESSION_ID, "eventId": 11})
+        await peer.notify("turn/completed", {"sessionId": SESSION_ID, "eventId": 13})
         completed.set()
 
     async def on_request(rid: int, method: str, params: dict) -> None:

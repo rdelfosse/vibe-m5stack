@@ -55,6 +55,13 @@ from plugin.app_server_client import (
     AppServerProtocolError,
     JsonRpcPeer,
 )
+from plugin.device_session import (
+    STATE_DONE,
+    STATE_ERROR,
+    STATE_THINKING,
+    STATE_WAITING,
+    DeviceSession,
+)
 
 logger = logging.getLogger("vibe-m5stack.proxy")
 
@@ -62,6 +69,33 @@ REQUEST_TIMEOUT_S = 3600.0  # les approvals restent ouvertes indefiniment
 _ENV_MODE = "M5STACK_APPROVAL_MODE"
 _ENV_TUI = "M5STACK_APPROVAL_TUI"
 _ENV_REAL_SERVER = "VIBE_M5STACK_REAL_APP_SERVER"
+_ENV_STATUS = "M5STACK_STATUS"
+
+
+def status_from_notification(method: str, params: dict) -> tuple[str, str, str] | None:
+    """Mappe une notification app server vers (state, detail, activity).
+
+    Etats attendus par le firmware: thinking/waiting/done/error, activites
+    reasoning/tool_exec/reading/streaming (cf. bridge.send_status).
+    """
+    if method == "turn/started":
+        return (STATE_THINKING, "", "reasoning")
+    if method == "turn/completed":
+        turn = params.get("turn") or {}
+        error = turn.get("error")
+        if error:
+            return (STATE_ERROR, str(error)[:40], "")
+        return (STATE_DONE, "", "")
+    if method == "history/entryAdded":
+        entry = params.get("entry") or {}
+        kind = entry.get("type")
+        if kind == "reasoning":
+            return (STATE_THINKING, "", "reasoning")
+        if kind == "effect":
+            return (STATE_THINKING, str(entry.get("title") or "")[:40], "tool_exec")
+        if entry.get("role") == "assistant":
+            return (STATE_THINKING, "", "streaming")
+    return None
 
 
 def resolve_real_app_server() -> list[str]:
@@ -107,30 +141,28 @@ class EnvApprover(Approver):
 class DeviceApprover(Approver):
     """Arbitrage physique sur le M5Stack.
 
-    Contrainte produit: attendre le bouton quoi qu'il arrive. Le bridge
-    attend 35 s par requete; on renvoie donc la meme requete (meme id,
-    l'eccran reste affiche) jusqu'a la reponse ou l'annulation. Device
-    absent au premier tour: retourne None (fallback TUI) au lieu de bloquer.
+    Avec une DeviceSession (proxy proprietaire du port): arbitrage sur la
+    connexion persistante, renvoi indefini jusqu'au bouton — attendre quoi
+    qu'il arrive. Sans session (statuts off): requete a connexion fraiche
+    sous FileLock, FIFO avec d'autres sessions, meme contrat de renvoi.
+    Device absent au premier tour: retourne None (fallback TUI).
     """
 
     RESEND_INTERVAL_S = 30.0
     ABSENT_PROBE_RETRY_S = 5.0
 
-    def __init__(self, bridge_factory: Callable[[], Any] | None = None) -> None:
-        self._bridge_factory = bridge_factory
+    def __init__(self, session: DeviceSession | None = None) -> None:
+        self.session = session
         self._bridge: Any = None
 
     def _get_bridge(self) -> Any:
         if self._bridge is None:
-            if self._bridge_factory is not None:
-                self._bridge = self._bridge_factory()
-            else:
-                from plugin.bridge import M5StackBridge
+            from plugin.bridge import M5StackBridge
 
-                self._bridge = M5StackBridge(auto_connect=False)
+            self._bridge = M5StackBridge(auto_connect=False)
         return self._bridge
 
-    def _decide_blocking(self, approval: ApprovalRequest, cancel: threading.Event) -> str | None:
+    def _decide_fresh(self, approval: ApprovalRequest, cancel: threading.Event) -> str | None:
         from plugin.config import resolve_port
 
         bridge = self._get_bridge()
@@ -155,10 +187,12 @@ class DeviceApprover(Approver):
         return None
 
     async def decide(self, approval: ApprovalRequest, cancel: threading.Event) -> str | None:
-        return await asyncio.to_thread(self._decide_blocking, approval, cancel)
+        if self.session is not None:
+            return await self.session.decide(approval, cancel)
+        return await asyncio.to_thread(self._decide_fresh, approval, cancel)
 
 
-def make_approver() -> Approver:
+def make_approver(session: DeviceSession | None = None) -> Approver:
     mode = os.environ.get(_ENV_MODE, "off").strip().lower()
     if mode == "auto-approve":
         return EnvApprover(DECISION_APPROVE)
@@ -167,7 +201,7 @@ def make_approver() -> Approver:
     if mode == "off":
         return EnvApprover(None)
     if mode == "device":
-        return DeviceApprover()
+        return DeviceApprover(session)
     raise SystemExit(f"{_ENV_MODE} inconnu: {mode} (off|auto-approve|auto-deny|device)")
 
 
@@ -235,15 +269,27 @@ class ApprovalRouter:
 class AppServerProxy:
     """Relais JSON-RPC client <-> app server avec interception d'approbations."""
 
-    def __init__(self, *, approver: Approver | None = None) -> None:
-        self.approver = approver if approver is not None else make_approver()
+    def __init__(
+        self,
+        *,
+        approver: Approver | None = None,
+        device: Any = None,
+    ) -> None:
+        self.approver = approver
+        self.device = device  # DeviceSession-like: push_status/stop
         self.left: JsonRpcPeer | None = None  # cote client (TUI)
         self.right: JsonRpcPeer | None = None  # cote app server
         self.proc: asyncio.subprocess.Process | None = None
         self.router: ApprovalRouter | None = None
         self.last_event_id = 0
 
-    async def run(self, real_app_server: list[str] | str | Path | None = None) -> None:
+    async def run(
+        self,
+        real_app_server: list[str] | str | Path | None = None,
+        *,
+        left_read: Callable[[], Awaitable[bytes]] | None = None,
+        left_write: Callable[[bytes], Awaitable[None]] | None = None,
+    ) -> None:
         if real_app_server is None:
             command = resolve_real_app_server()
         elif isinstance(real_app_server, (str, Path)):
@@ -258,21 +304,30 @@ class AppServerProxy:
         )
         assert self.proc.stdout and self.proc.stdin and self.proc.stderr
 
-        async def read_stdin() -> bytes:
-            return await asyncio.to_thread(sys.stdin.buffer.read1, 65536)
+        if left_read is None:
 
-        async def write_stdout(line: bytes) -> None:
-            await asyncio.to_thread(sys.stdout.buffer.write, line)
-            await asyncio.to_thread(sys.stdout.buffer.flush)
+            async def left_read_default() -> bytes:  # type: ignore[misc]
+                return await asyncio.to_thread(sys.stdin.buffer.read1, 65536)
+
+            left_read = left_read_default
+        if left_write is None:
+
+            async def left_write_default(line: bytes) -> None:  # type: ignore[misc]
+                await asyncio.to_thread(sys.stdout.buffer.write, line)
+                await asyncio.to_thread(sys.stdout.buffer.flush)
+
+            left_write = left_write_default
 
         async def write_child(line: bytes) -> None:
             self.proc.stdin.write(line)
             await self.proc.stdin.drain()
 
-        self.left = JsonRpcPeer(read_stdin, write_stdout, label="client", request_timeout=REQUEST_TIMEOUT_S)
+        self.left = JsonRpcPeer(left_read, left_write, label="client", request_timeout=REQUEST_TIMEOUT_S)
         self.right = JsonRpcPeer(
             lambda: self.proc.stdout.read(65536), write_child, label="server", request_timeout=REQUEST_TIMEOUT_S
         )
+        if self.approver is None:
+            self.approver = make_approver()
         self.router = ApprovalRouter(self.approver, self._send_callback_result)
 
         self.left.on_request = self._on_client_request
@@ -285,13 +340,15 @@ class AppServerProxy:
         left_task = self.left.serve()
         exit_task = asyncio.get_running_loop().create_task(self._child_exit_watch())
 
-        done, pending = await asyncio.wait(
-            {left_task, right_task, exit_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-        await self.close()
+        try:
+            done, pending = await asyncio.wait(
+                {left_task, right_task, exit_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+        finally:
+            await self.close()
 
     async def _child_exit_watch(self) -> None:
         assert self.proc is not None
@@ -362,6 +419,8 @@ class AppServerProxy:
         assert self.left and self.right and self.router
         approval = ApprovalRequest.from_callback(params.get("callback") or {})
         asyncio.get_running_loop().create_task(self.router.offer(approval))
+        if self.device:
+            await asyncio.to_thread(self.device.push_status, STATE_WAITING, approval.tool)
         if self.router.tui_visible:
             try:
                 ack = await self.left.request("callback/call", params)
@@ -385,6 +444,11 @@ class AppServerProxy:
         if isinstance(event_id, int) and event_id > self.last_event_id:
             self.last_event_id = event_id
         await self.left.notify(method, params)
+        if self.device:
+            mapped = status_from_notification(method, params)
+            if mapped:
+                state, detail, activity = mapped
+                await asyncio.to_thread(self.device.push_status, state, detail, activity)
 
     async def close(self) -> None:
         if self.left:
@@ -397,6 +461,9 @@ class AppServerProxy:
                 await asyncio.wait_for(self.proc.wait(), timeout=5)
             except TimeoutError:
                 self.proc.kill()
+        if self.device and hasattr(self.device, "stop"):
+            stop = self.device.stop
+            await asyncio.to_thread(stop)
 
 
 def main() -> None:
@@ -405,10 +472,18 @@ def main() -> None:
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         stream=sys.stderr,
     )
+    device: DeviceSession | None = None
+    if os.environ.get(_ENV_STATUS, "device").strip().lower() != "off":
+        device = DeviceSession()
+        if not device.start():
+            device = None
     try:
-        asyncio.run(AppServerProxy().run())
+        asyncio.run(AppServerProxy(approver=make_approver(device), device=device).run())
     except KeyboardInterrupt:
         pass
+    finally:
+        if device:
+            device.stop()
 
 
 if __name__ == "__main__":

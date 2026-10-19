@@ -54,6 +54,7 @@ async def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="m5stack-e2e-"))
     env = os.environ.copy()
     env["M5STACK_APPROVAL_MODE"] = MODE
+    env["M5STACK_STATUS"] = "off"  # pas de sonde de port sans materiel
     env["PYTHONPATH"] = str(REPO_ROOT)
     env.setdefault("VIBE_M5STACK_LOG", "INFO")
 
