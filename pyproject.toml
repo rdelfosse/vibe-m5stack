@@ -38,6 +38,7 @@ test = [
 
 [project.scripts]
 vibe-m5stack = "plugin.__main__:main"
+vibe-m5stack-app-server = "plugin.app_server_proxy:main"
 m5stack-mcp-server = "plugin.mcp_server:main"
 
 [tool.setuptools]

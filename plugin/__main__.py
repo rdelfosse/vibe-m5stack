@@ -84,6 +84,54 @@ def _handle_cli_command(argv: list) -> bool:
     return False
 
 
+def _maybe_run_vibe3():
+    """Flow Vibe 3.x: TUI Rust + proxy app server M5Stack.
+
+    Retourne le code de sortie si l'environnement est un Vibe 3.x,
+    None sinon (le flow legacy 2.x prend le relai).
+    """
+    try:
+        import vibe
+    except ImportError:
+        return None
+    exe = "vibe-rs.exe" if sys.platform == "win32" else "vibe-rs"
+    vibe_rs = Path(vibe.__file__).resolve().parent / "_bin" / exe
+    if not vibe_rs.exists():
+        return None
+
+    import shutil
+    import subprocess
+
+    proxy = shutil.which("vibe-m5stack-app-server")
+    if not proxy:
+        proxy_exe = "vibe-m5stack-app-server.exe" if sys.platform == "win32" else "vibe-m5stack-app-server"
+        candidate = Path(sys.executable).resolve().parent / proxy_exe
+        if candidate.exists():
+            proxy = str(candidate)
+
+    env = os.environ.copy()
+    if proxy:
+        env["VIBE_APP_SERVER_BIN"] = proxy
+        if not env.get("M5STACK_APPROVAL_MODE"):
+            from plugin import config
+
+            env["M5STACK_APPROVAL_MODE"] = "device" if config.resolve_port() else "off"
+        mode = env.get("M5STACK_APPROVAL_MODE", "off")
+        print(f"[m5stack] Vibe 3.x: proxy app server en place (mode {mode})", file=sys.stderr)
+    else:
+        print(
+            "[m5stack] Vibe 3.x sans proxy: vibe-m5stack-app-server introuvable, "
+            "approbations TUI uniquement",
+            file=sys.stderr,
+        )
+
+    if len(sys.argv) >= 3 and sys.argv[1] == "-m" and sys.argv[2] == "plugin":
+        passthrough = sys.argv[3:]
+    else:
+        passthrough = sys.argv[1:]
+    return subprocess.run([str(vibe_rs), *passthrough], env=env).returncode
+
+
 def main():
     """Entry point for vibe-m5stack command."""
     # Add plugin directory to path (in case we're run from elsewhere)
@@ -111,6 +159,14 @@ def main():
         print("", file=sys.stderr)
         print("Make sure mistral-vibe is installed in the Python environment you're using.", file=sys.stderr)
         sys.exit(1)
+
+    # Vibe 3.x: la TUI Rust ne peut plus etre monkey-patchee; on lance le
+    # flow proxy (VIBE_APP_SERVER_BIN) si l'environnement est un 3.x.
+    exit_code = _maybe_run_vibe3()
+    if exit_code is not None:
+        sys.exit(exit_code)
+
+    # --- flow legacy Vibe 2.x (monkey-patch AgentLoop) ---
 
     # Load the hook - this monkey-patches AgentLoop
     import plugin.vibe_m5stack_hook
