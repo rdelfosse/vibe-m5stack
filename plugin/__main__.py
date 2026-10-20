@@ -39,7 +39,7 @@ def _handle_cli_command(argv: list) -> bool:
         True if a CLI command was handled, False otherwise
     """
     # CLI commands that should NOT load Vibe
-    cli_commands = {'setup', 'doctor'}
+    cli_commands = {'setup', 'doctor', 'demo'}
     
     # Determine the command position based on how we were called
     # Cases:

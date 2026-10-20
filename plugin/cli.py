@@ -464,6 +464,7 @@ def main() -> int:
 Exemples:
   vibe-m5stack setup       # Détecter et configurer le port
   vibe-m5stack doctor      # Diagnostic du système
+  vibe-m5stack demo        # L'histoire de Renard sur le device
   vibe-m5stack             # Lancer Vibe (comme avant)
         """
     )
@@ -485,12 +486,27 @@ Exemples:
         description="Vérifie que tout est correctement configuré pour utiliser le M5Stack."
     )
     doctor_parser.set_defaults(func=cmd_doctor)
-    
+
+    # Demo command
+    demo_parser = subparsers.add_parser(
+        "demo",
+        help="L'histoire de Renard sur le M5Stack",
+        description="Mode démo piloté par PC: joue l'histoire de Renard en voix "
+        "émotionnelles (Voxtral 3) sur le haut-parleur du device, sans Vibe."
+    )
+    demo_parser.set_defaults(func=_cmd_demo)
+
     args = parser.parse_args()
-    
+
     if hasattr(args, "func"):
         return args.func()
     else:
         # No subcommand - this should not happen as __main__.py handles it
         parser.print_help()
         return 1
+
+
+def _cmd_demo() -> int:
+    from plugin import demo
+
+    return demo.run()
