@@ -47,6 +47,50 @@ def make_approval(cid: str) -> ApprovalRequest:
     return ApprovalRequest(callback_id=cid, session_id="s", tool="t", choices=["approve", "deny"])
 
 
+def test_transcriber_override_bypasses_legacy_gate():
+    """Régression: la barriere transcription_available() du legacy (cle via
+    vibe 2.x, indisponible sous Vibe 3) ne doit pas bloquer le chemin REST."""
+    import base64
+    import time
+
+    from plugin.voice_handler import VoiceHandler
+
+    class LegacyIndisponible:
+        def transcription_available(self):
+            return False  # c'est le bug: import vibe 2.x en echec
+
+        def availability_detail(self):
+            return "sounddevice=False mistralai=True api_key=NON"
+
+        def transcribe_sync(self, wav):
+            raise AssertionError("le chemin legacy ne doit pas etre pris")
+
+    handler = VoiceHandler()
+    handler._voice_input = LegacyIndisponible()  # type: ignore[assignment]
+    handler.set_transcriber(lambda wav: "crée le fichier test voix")
+    injectes: list[str] = []
+    handler.set_inject_callback(injectes.append)
+    handler.set_send_voice_ack_callback(lambda state, text="": None)
+
+    from plugin.tts_handler import wav_to_ulaw_16k
+    from tests.test_tts_speaker import make_wav
+
+    ulaw = wav_to_ulaw_16k(make_wav(samples=4096))  # ~256 ms
+
+    handler.handle_voice_message(
+        {"type": "voice", "action": "start", "mode": "prompt", "id": 0, "mic": "device"}
+    )
+    for i in range(0, len(ulaw), 256):
+        handler.handle_audio_chunk({"type": "audio", "data": base64.b64encode(ulaw[i:i + 256]).decode()})
+    handler.handle_audio_end({"type": "audio_end", "total": len(ulaw), "ms": len(ulaw) // 16})
+
+    for _ in range(100):  # le thread de transcription est asynchrone
+        if injectes:
+            break
+        time.sleep(0.05)
+    assert injectes == ["crée le fichier test voix"]
+
+
 async def test_router_deny_latest():
     sent: list[dict] = []
 

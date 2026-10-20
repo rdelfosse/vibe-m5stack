@@ -50,12 +50,20 @@ class VoiceHandler:
 
     def set_transcriber(self, fn):
         """Surcharge la transcription (v0.7: plugin.stt.transcribe_sync, REST
-        sans SDK). None retombe sur voice.py (SDK mistralai)."""
+        sans SDK). Accepte une fonction sync (wav -> texte) ou un objet
+        exposant transcribe_sync. None retombe sur voice.py (SDK mistralai)."""
         self._transcriber_override = fn
 
     @property
     def _transcriber(self):
-        return getattr(self, "_transcriber_override", None) or self._voice_input
+        override = getattr(self, "_transcriber_override", None)
+        if override is None:
+            return self._voice_input
+        if hasattr(override, "transcribe_sync"):
+            return override
+        import types
+
+        return types.SimpleNamespace(transcribe_sync=override)
 
     # -- Entrée des messages device ----------------------------------------
 
@@ -153,7 +161,11 @@ class VoiceHandler:
         self._maybe_dump_debug(wav_data)
         self._send_ack("transcribing", "")
 
-        if not self._voice_input.transcription_available():
+        # Barriere de disponibilite UNIQUEMENT pour le chemin legacy (SDK
+        # mistralai + cle via vibe 2.x). Avec un transcriber injecte (v0.7,
+        # REST), la cle se resout autrement (env/keyring/.env) et l'echec
+        # retourne proprement une transcription vide dans le thread.
+        if getattr(self, "_transcriber_override", None) is None and not self._voice_input.transcription_available():
             logger.error(
                 "Transcription not available: " + self._voice_input.availability_detail()
             )
