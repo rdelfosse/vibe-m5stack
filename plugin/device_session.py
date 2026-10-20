@@ -47,14 +47,69 @@ class DeviceSession:
     HEARTBEAT_S = 3.0
     APPROVAL_RESEND_S = 30.0
 
-    def __init__(self, bridge: Any = None, port: str | None = None) -> None:
+    def __init__(
+        self,
+        bridge: Any = None,
+        port: str | None = None,
+        *,
+        on_transcript: Any = None,
+        on_reject: Any = None,
+    ) -> None:
         self.bridge = bridge
         self.port = port
+        self.on_transcript = on_transcript  # (texte) -> tour injecte par le proxy
+        self.on_reject = on_reject  # (raison) -> approbation en cours refusee
         self.running = False
         self._seq = 0
         self._lock = threading.Lock()
         self._current: tuple[str, str, str] = (STATE_DONE, "", "")
         self._hb_thread: threading.Thread | None = None
+
+    def _configure_voice(self) -> None:
+        """Branche la dictee du device (VoiceHandler 0.6) sur le proxy v0.7.
+
+        Le bridge route deja les messages voice/audio/audio_end vers le
+        singleton VoiceHandler; on lui fournit transcriber REST (sans SDK)
+        et callbacks.
+        """
+        try:
+            from plugin import stt
+            from plugin.voice_handler import get_voice_handler
+
+            handler = get_voice_handler()
+            handler.set_transcriber(stt.transcribe_sync)
+            handler.set_send_voice_ack_callback(self._send_voice_ack)
+            if self.on_transcript is not None:
+                handler.set_inject_callback(self._dispatch_transcript)
+            if self.on_reject is not None:
+                handler.set_resolve_approval_callback(self._dispatch_reject)
+        except Exception as exc:  # noqa: BLE001 - la voix ne doit jamais casser le statut
+            logger.warning("DeviceSession: voix non branchee: %s", exc)
+
+    def _send_voice_ack(self, state: str, text: str = "") -> None:
+        if self.bridge:
+            try:
+                self.bridge.send_voice_ack(state, text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("voice ack: %s", exc)
+
+    def _dispatch_transcript(self, text: str) -> None:
+        cb = self.on_transcript
+        if cb is None:
+            return
+        try:
+            cb(text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("transcript callback: %s", exc)
+
+    def _dispatch_reject(self, request_id, approved: bool, reason: str) -> None:
+        cb = self.on_reject
+        if cb is None:
+            return
+        try:
+            cb(reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reject callback: %s", exc)
 
     def start(self) -> bool:
         """Ouvre la connexion persistante. False si aucun device."""
@@ -77,6 +132,7 @@ class DeviceSession:
         self.running = True
         self._hb_thread = threading.Thread(target=self._heartbeat_loop, name="m5stack-hb", daemon=True)
         self._hb_thread.start()
+        self._configure_voice()
         logger.info("DeviceSession: connecte sur %s", port)
         return True
 

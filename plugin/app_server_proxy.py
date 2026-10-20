@@ -226,6 +226,8 @@ class ApprovalRouter:
         self.send_result = send_result  # requete callback/result vers le serveur
         self.answered: set[str] = set()
         self.cancels: dict[str, threading.Event] = {}
+        #: approbations en cours d'arbitrage device: callback_id -> (approval, cancel)
+        self.pending: dict[str, tuple[ApprovalRequest, threading.Event]] = {}
         self.tui_visible = os.environ.get(_ENV_TUI, "1") != "0"
 
     async def offer(self, approval: ApprovalRequest) -> None:
@@ -234,12 +236,14 @@ class ApprovalRouter:
             return
         cancel = threading.Event()
         self.cancels[approval.callback_id] = cancel
+        self.pending[approval.callback_id] = (approval, cancel)
 
         async def run() -> None:
             try:
                 decision = await self.approver.decide(approval, cancel)
             finally:
                 self.cancels.pop(approval.callback_id, None)
+                self.pending.pop(approval.callback_id, None)
             if decision is None or cancel.is_set():
                 return
             if approval.callback_id in self.answered:
@@ -263,6 +267,34 @@ class ApprovalRouter:
 
         asyncio.get_running_loop().create_task(run())
 
+    async def deny_latest(self, reason: str) -> bool:
+        """Refus vocal: refuse l'approbation device en cours, avec la raison.
+
+        dict.popitem() renvoie le dernier insere: s'il y a plusieurs
+        approbations simultanees, on refuse la plus recente (l'ecran affiche).
+        """
+        if not self.pending:
+            logger.info("refus vocal sans approbation en cours: ignore")
+            return False
+        callback_id, (approval, cancel) = self.pending.popitem()
+        await self.send_result(
+            {
+                "sessionId": approval.session_id,
+                "result": {
+                    "callbackId": callback_id,
+                    "output": {
+                        "type": "approval",
+                        "decision": {"type": DECISION_DENY},
+                        "feedback": f"refus vocal: {reason}",
+                    },
+                },
+            }
+        )
+        self.answered.add(callback_id)
+        cancel.set()
+        logger.info("approbation %s refusee par la voix: %s", callback_id, reason)
+        return True
+
     def tui_answered(self, callback_id: str) -> None:
         """La TUI a repondu: marque arbitree et annule l'approveur en course."""
         self.answered.add(callback_id)
@@ -277,6 +309,47 @@ class ApprovalRouter:
 
 class AppServerProxy:
     """Relais JSON-RPC client <-> app server avec interception d'approbations."""
+
+    # -- voix entrante (dictee device -> tour / refus) ---------------------
+
+    def queue_voice_turn(self, text: str) -> None:
+        """Appele depuis le thread de transcription: planifie l'injection."""
+        loop = self._loop
+        if loop is None or not self.session_id:
+            logger.warning("voix: aucune session active, dictee ignoree: %s", text[:60])
+            return
+        loop.call_soon_threadsafe(lambda: loop.create_task(self._enqueue_voice_turn(text)))
+
+    async def _enqueue_voice_turn(self, text: str) -> None:
+        assert self.right
+        if not self.session_id:
+            return
+        try:
+            response = await self.right.request(
+                "session/turn/enqueue",
+                {
+                    "sessionId": self.session_id,
+                    "entries": [{"role": "user", "content": [{"type": "text", "text": text}]}],
+                },
+            )
+            if "error" in response:
+                logger.warning("voix: enqueue rejete: %s", response["error"])
+            else:
+                logger.info("voix: tour enfile par dictee: %s", text[:80])
+        except (TimeoutError, AppServerProtocolError) as exc:
+            logger.warning("voix: enqueue impossible: %s", exc)
+
+    def voice_reject(self, reason: str) -> None:
+        """Appele depuis le thread de transcription: refus de l'approbation."""
+        loop = self._loop
+        if loop is None:
+            return
+        loop.call_soon_threadsafe(lambda: loop.create_task(self._voice_reject_async(reason)))
+
+    async def _voice_reject_async(self, reason: str) -> None:
+        if not self.router:
+            return
+        await self.router.deny_latest(reason)
 
     def __init__(
         self,
@@ -294,6 +367,8 @@ class AppServerProxy:
         self.router: ApprovalRouter | None = None
         self.last_event_id = 0
         self._speak_task: asyncio.Task[None] | None = None
+        self.session_id: str | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def run(
         self,
@@ -347,6 +422,7 @@ class AppServerProxy:
         # Connexion device en tache de fond: la connexion serie/BT peut etre
         # lente et le client (TUI) attend un initialize rapide — jamais sur
         # le chemin critique. Les statuts partent des qu'elle est prete.
+        self._loop = asyncio.get_running_loop()
         if self.device is None and self.device_factory is not None:
             def connect_device() -> None:
                 device = self.device_factory()
@@ -425,6 +501,14 @@ class AppServerProxy:
             await self.left.respond(rid, response.get("result") or {})
             if callback_id:
                 self.router.answered.add(callback_id)
+            if method in ("session/start", "session/resume", "session/continue"):
+                # le proxy a besoin de l'id de session pour injecter les
+                # tours dictes (voix entrante).
+                state = (response.get("result") or {}).get("state") or {}
+                session_id = (state.get("session") or {}).get("id")
+                if session_id:
+                    self.session_id = session_id
+                    logger.info("session active: %s", session_id)
 
     async def _on_client_notification(self, method: str, params: dict) -> None:
         assert self.right
@@ -593,10 +677,14 @@ def main() -> None:
     def make_device_session() -> DeviceSession | None:
         if os.environ.get(_ENV_STATUS, "device").strip().lower() == "off":
             return None
-        return DeviceSession()
+        return DeviceSession(
+            on_transcript=proxy.queue_voice_turn,
+            on_reject=proxy.voice_reject,
+        )
 
+    proxy = AppServerProxy(device_factory=make_device_session)
     try:
-        asyncio.run(AppServerProxy(device_factory=make_device_session).run())
+        asyncio.run(proxy.run())
     except KeyboardInterrupt:
         pass
 

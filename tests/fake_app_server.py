@@ -109,6 +109,13 @@ async def serve() -> None:
                 {"state": {"session": {"id": SESSION_ID}}, "lastEventId": 1},
             )
         elif method == "session/turn/enqueue":
+            entries = params.get("entries") or []
+            text = ""
+            for entry in entries:
+                for block in entry.get("content") or []:
+                    if block.get("type") == "text":
+                        text = block.get("text") or ""
+            record({"event": "turn_enqueue", "text": text})
             await peer.respond(rid, {"queueItemId": "q-fake-1"})
             asyncio.get_running_loop().create_task(simulated_turn())
         elif method == "callback/result":

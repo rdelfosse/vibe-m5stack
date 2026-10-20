@@ -48,6 +48,15 @@ class VoiceHandler:
     def set_send_voice_ack_callback(self, callback):
         self._send_voice_ack_callback = callback
 
+    def set_transcriber(self, fn):
+        """Surcharge la transcription (v0.7: plugin.stt.transcribe_sync, REST
+        sans SDK). None retombe sur voice.py (SDK mistralai)."""
+        self._transcriber_override = fn
+
+    @property
+    def _transcriber(self):
+        return getattr(self, "_transcriber_override", None) or self._voice_input
+
     # -- Entrée des messages device ----------------------------------------
 
     def handle_voice_message(self, msg):
@@ -251,7 +260,7 @@ class VoiceHandler:
 
     def _transcribe_thread(self, wav_data, do_inject, reject_id):
         try:
-            text = self._voice_input.transcribe_sync(wav_data)
+            text = self._transcriber.transcribe_sync(wav_data)
             text = text.strip() if text else ""
 
             self._send_ack("done", text[:60])
