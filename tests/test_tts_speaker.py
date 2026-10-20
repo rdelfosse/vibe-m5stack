@@ -25,6 +25,21 @@ import wave
 from plugin import tts_speaker
 
 
+def test_pick_voice_emotions():
+    pick = tts_speaker.pick_voice
+    # succes -> joie/excitation ; refus -> colere ; echec -> tristesse
+    assert pick("Parfait, tout fonctionne, c'est un succes !", "fr") in (
+        "fr_marie_happy", "fr_marie_excited",
+    )
+    assert pick("Le test a echoue, il y a une erreur", "fr") == "fr_marie_sad"
+    assert pick("Je refuse cette action, c'est interdit", "fr") == "fr_marie_angry"
+    assert pick("Incroyable, enfin reussi !!!", "fr") == "fr_marie_excited"
+    assert pick("Voici le fichier demande.", "fr") == "fr_marie_neutral"
+    # langues non couvertes: voix du menu, pas d'emotion au hasard
+    assert pick("error failed", "en") == "gb_jane_neutral"
+    assert pick("n'importe quoi", "de") == tts_speaker.VOICE_BY_LANG["fr"]
+
+
 def make_wav(samples: int = 512, rate: int = 16000) -> bytes:
     """Petit WAV PCM16 mono pour les tests."""
     buffer = io.BytesIO()

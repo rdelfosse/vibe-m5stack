@@ -129,6 +129,61 @@ def _voice_for(bridge: Any) -> str:
     return VOICE_BY_LANG.get(lang, VOICE_BY_LANG["fr"])
 
 
+#: Choix d'emotion heuristique selon le ton de la reponse (fr uniquement:
+#: variants de Marie verifiees sur l'API ; jane n'a pas encore d'emoctions
+#: confirmees — rester en neutral pour les autres langues).
+EMOTION_VARIANTS = {
+    "fr": {
+        "neutral": "fr_marie_neutral",
+        "happy": "fr_marie_happy",
+        "sad": "fr_marie_sad",
+        "excited": "fr_marie_excited",
+        "angry": "fr_marie_angry",
+    }
+}
+
+_EMOTION_MARKERS = {
+    "angry": (
+        "je refuse", "refus", "interdit", "danger", "jamais", "aucun cas",
+        "ne dois pas", "attention",
+    ),
+    "sad": (
+        "erreur", "echec", "échec", "impossible", "desole", "désolé",
+        "echoue", "échoué", "raté", "bug", "cassé", "inconnu", "absent",
+    ),
+    "happy": (
+        "reussi", "réussi", "parfait", "succes", "succès", "bravo",
+        "génial", "genial", "fonctionne", "super", "corrigé", "créé",
+    ),
+    "excited": (
+        "gagné", "incroyable", "excellent", "enfin", "voilà",
+        "merveilleux", "fantastique",
+    ),
+}
+
+
+def pick_voice(text: str, lang: str) -> str:
+    """Choisit la voix (et son emotion) selon le ton du texte.
+
+    Heuristique locale, sans appel LLM: les mots marqueurs votent, les
+    points d'exclamation boostent l'excitation. Egalite ou aucun marqueur:
+    neutral — la voix du menu reste la reference par defaut.
+    """
+    variants = EMOTION_VARIANTS.get(lang)
+    if variants is None:
+        return VOICE_BY_LANG.get(lang, VOICE_BY_LANG["fr"])
+    lowered = text.lower()
+    scores = {
+        emotion: sum(lowered.count(marker) for marker in markers)
+        for emotion, markers in _EMOTION_MARKERS.items()
+    }
+    scores["excited"] += lowered.count("!")
+    best = max(scores, key=lambda e: scores[e])
+    if scores[best] == 0:
+        return variants["neutral"]
+    return variants[best]
+
+
 async def speak(
     text: str,
     bridge: Any,
@@ -158,7 +213,9 @@ async def speak(
 
     synth_fn = synth or synth_wav
     try:
-        voice = _voice_for(bridge)
+        lang = getattr(bridge, "voice_lang", None) or "fr"
+        voice = pick_voice(clean, lang)
+        logger.info("voix choisie: %s (lang=%s)", voice, lang)
         wav = await asyncio.to_thread(synth_fn, clean, voice)
         if cancel.is_set():
             return False
