@@ -10,6 +10,54 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-20
+
+### Ajouté
+- **Compatibilité Mistral Vibe 3.x** : la TUI Rust de Vibe 3 ne peut plus
+  être monkey-patchée — le plugin s'y insère par un **proxy app server**
+  (`VIBE_APP_SERVER_BIN` → `vibe-m5stack-app-server`) qui relaie le
+  protocole JSON-RPC et intercepte les approbations au niveau protocole
+  (`callback/call` → bouton A/B/C, `callback/result`). Attente illimitée :
+  le callback reste ouvert jusqu'au bouton, quoi qu'il arrive. Course
+  TUI/device : premier répondant gagne, réponse TUI tardive avalée.
+  Modes : `off`, `auto-approve`, `auto-deny` (tests), `device` ;
+  `M5STACK_APPROVAL_TUI=0` pour que le device arbitre seul.
+- **Statuts device** : le proxy devient propriétaire du port M5Stack
+  (connexion persistante, heartbeat 3 s) et mappe les notifications app
+  server vers les états firmware (thinking/reasoning, tool_exec avec nom
+  d'outil, waiting sur approbation, done/error).
+- **TTS Voxtral 3** (`voxtral-mini-tts-3-0`, REST direct sans SDK) :
+  lecture de la réponse de l'agent sur le haut-parleur du Fire, décision
+  par le menu Voice Out du device, pacing µ-law inchangé côté firmware.
+  **Voix émotionnelle** : `fr_marie_{neutral,happy,sad,excited,angry}`
+  (variants vérifiées sur l'API) choisies selon le ton de la réponse
+  (heuristique locale). Interruption : bouton device, nouveau tour.
+- **Voix entrante** : dicée sur le device → STT REST
+  (`voxtral-mini-transcribe-3-0`, détection de langue auto) → tour injecté
+  via `session/turn/enqueue` (la file d'input du CLI). Rejet vocal d'une
+  approbation avec la raison dictée (`router.deny_latest`).
+- `tools/spike_app_server_client.py`, `tools/e2e_proxy_check.py` (modes
+  approve/deny/speak) et un fake app server autonome ; 19 nouveaux tests
+  (protocole pur, sans LLM ni matériel).
+- `plugin/app_server_client.py` : bibliothèque client compagnon réutilisable
+  (transport tamponné > 64 KiB, sessions, tours, callbacks).
+
+### Changé
+- **Dépendance** : `mistral-vibe>=2.23` sans borne supérieure — le wrapper
+  (`plugin/__main__.py`) détecte la version à l'exécution : 3.x → flow
+  proxy, 2.x → flow legacy monkey-patch. La borne `<3` du 0.6.2 n'a plus
+  de raison d'être.
+- `voice_handler.py` : transcriber injectable (`set_transcriber`) — le
+  legacy retombe sur le SDK mistralai, le proxy sur le REST.
+- Logs du proxy dans `%TEMP%\vibe-m5stack-proxy.log` (la TUI Rust avale
+  la stderr).
+
+### Validé sur le matériel
+- Approbation arbitrée par bouton physique en mode device-only (fichier
+  créé / refusé selon A/B), course TUI/device, statuts pendant un tour,
+  TTS (180 chunks, diag firmware à zéro erreur), voix émotionnelle
+  (`fr_marie_happy` sur réponse positive), round-trip TTS→STT exact.
+
 ## [0.6.1] - 2026-08-24
 
 ### Corrigé

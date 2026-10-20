@@ -127,7 +127,7 @@ REPO_ROOT=$(dirname "$(readlink -f "$0")")
 
 write_status "Installation depuis: $REPO_ROOT" "$YELLOW"
 
-uv tool install --reinstall 'mistral-vibe>=2.23,<3' --with-editable "$REPO_ROOT" --with-executables-from vibe-m5stack
+uv tool install --reinstall 'mistral-vibe>=2.23' --with-editable "$REPO_ROOT" --with-executables-from vibe-m5stack
 write_status "Installation terminée" "$GREEN"
 
 # Step 4: Setup M5Stack

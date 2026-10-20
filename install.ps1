@@ -161,13 +161,13 @@ if (-not $repoRoot) {
 Write-Status "Installation depuis: $repoRoot" -Color Yellow
 
 try {
-    & uv tool install --reinstall "mistral-vibe>=2.23,<3" --with-editable $repoRoot --with-executables-from vibe-m5stack
+    & uv tool install --reinstall "mistral-vibe>=2.23" --with-editable $repoRoot --with-executables-from vibe-m5stack
     Write-Status "Installation terminée" -Color Green
 } catch {
     Write-Status "Échec de l'installation: $_" -Color Red
     Write-Host ""
     Write-Host "Essaie de lancer manuellement:" -ForegroundColor Yellow
-    Write-Host "  uv tool install --reinstall `"mistral-vibe>=2.23,<3`" --with-editable $repoRoot --with-executables-from vibe-m5stack" -ForegroundColor Cyan
+    Write-Host "  uv tool install --reinstall `"mistral-vibe>=2.23`" --with-editable $repoRoot --with-executables-from vibe-m5stack" -ForegroundColor Cyan
     exit 1
 }
 

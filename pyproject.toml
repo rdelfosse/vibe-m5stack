@@ -22,7 +22,9 @@ dynamic = ["version"]
 description = "Physical approval device (M5Stack Fire) for Mistral Vibe CLI"
 requires-python = ">=3.12"
 dependencies = [
-    "mistral-vibe>=2.23,<3",
+    # 2.x: flow legacy (monkey-patch AgentLoop) ; 3.x: flow proxy app server.
+    # Le wrapper (plugin/__main__.py) choisit a l'execution selon la version.
+    "mistral-vibe>=2.23",
     "pyserial>=3.5",
     "sounddevice>=0.4.6",
     "mcp>=1.0.0",
