@@ -141,19 +141,26 @@ class EnvApprover(Approver):
 class DeviceApprover(Approver):
     """Arbitrage physique sur le M5Stack.
 
-    Avec une DeviceSession (proxy proprietaire du port): arbitrage sur la
-    connexion persistante, renvoi indefini jusqu'au bouton — attendre quoi
-    qu'il arrive. Sans session (statuts off): requete a connexion fraiche
-    sous FileLock, FIFO avec d'autres sessions, meme contrat de renvoi.
-    Device absent au premier tour: retourne None (fallback TUI).
+    Avec une DeviceSession connectee (proxy proprietaire du port):
+    arbitrage sur la connexion persistante, renvoi indefini jusqu'au bouton
+    — attendre quoi qu'il arrive. Sans session (statuts off ou device pas
+    encore connecte): requete a connexion fraiche sous FileLock, FIFO avec
+    d'autres sessions, meme contrat de renvoi. Device absent au premier
+    tour: retourne None (fallback TUI).
     """
 
     RESEND_INTERVAL_S = 30.0
     ABSENT_PROBE_RETRY_S = 5.0
 
-    def __init__(self, session: DeviceSession | None = None) -> None:
-        self.session = session
+    def __init__(self, session_provider: Callable[[], Any] | None = None) -> None:
+        self.session_provider = session_provider
         self._bridge: Any = None
+
+    def _live_session(self) -> Any | None:
+        session = self.session_provider() if self.session_provider else None
+        if session is not None and getattr(session, "running", False):
+            return session
+        return None
 
     def _get_bridge(self) -> Any:
         if self._bridge is None:
@@ -187,12 +194,13 @@ class DeviceApprover(Approver):
         return None
 
     async def decide(self, approval: ApprovalRequest, cancel: threading.Event) -> str | None:
-        if self.session is not None:
-            return await self.session.decide(approval, cancel)
+        session = self._live_session()
+        if session is not None:
+            return await session.decide(approval, cancel)
         return await asyncio.to_thread(self._decide_fresh, approval, cancel)
 
 
-def make_approver(session: DeviceSession | None = None) -> Approver:
+def make_approver(session_provider: Callable[[], Any] | None = None) -> Approver:
     mode = os.environ.get(_ENV_MODE, "off").strip().lower()
     if mode == "auto-approve":
         return EnvApprover(DECISION_APPROVE)
@@ -201,7 +209,7 @@ def make_approver(session: DeviceSession | None = None) -> Approver:
     if mode == "off":
         return EnvApprover(None)
     if mode == "device":
-        return DeviceApprover(session)
+        return DeviceApprover(session_provider)
     raise SystemExit(f"{_ENV_MODE} inconnu: {mode} (off|auto-approve|auto-deny|device)")
 
 
@@ -274,9 +282,11 @@ class AppServerProxy:
         *,
         approver: Approver | None = None,
         device: Any = None,
+        device_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.approver = approver
         self.device = device  # DeviceSession-like: push_status/stop
+        self.device_factory = device_factory
         self.left: JsonRpcPeer | None = None  # cote client (TUI)
         self.right: JsonRpcPeer | None = None  # cote app server
         self.proc: asyncio.subprocess.Process | None = None
@@ -327,8 +337,24 @@ class AppServerProxy:
             lambda: self.proc.stdout.read(65536), write_child, label="server", request_timeout=REQUEST_TIMEOUT_S
         )
         if self.approver is None:
-            self.approver = make_approver()
+            self.approver = make_approver(
+                lambda: self.device if self.device is not None else None
+            )
         self.router = ApprovalRouter(self.approver, self._send_callback_result)
+
+        # Connexion device en tache de fond: la connexion serie/BT peut etre
+        # lente et le client (TUI) attend un initialize rapide — jamais sur
+        # le chemin critique. Les statuts partent des qu'elle est prete.
+        if self.device is None and self.device_factory is not None:
+            def connect_device() -> None:
+                device = self.device_factory()
+                if device is not None and getattr(device, "start", lambda: False)():
+                    self.device = device
+                    logger.info("device connecte en arriere-plan")
+                else:
+                    logger.info("device absent ou indisponible: statuts/approbation via TUI")
+
+            asyncio.get_running_loop().create_task(asyncio.to_thread(connect_device))
 
         self.left.on_request = self._on_client_request
         self.left.on_notification = self._on_client_notification
@@ -466,24 +492,41 @@ class AppServerProxy:
             await asyncio.to_thread(stop)
 
 
-def main() -> None:
+def _setup_logging() -> Path:
+    """Logs vers un fichier: la TUI Rust avalait la stderr du proxy.
+
+    Retourne le chemin du fichier de log."""
+    import tempfile
+
+    log_path = os.environ.get("VIBE_M5STACK_LOG_FILE")
+    if not log_path:
+        log_path = str(Path(tempfile.gettempdir()) / "vibe-m5stack-proxy.log")
+    level = os.environ.get("VIBE_M5STACK_LOG", "INFO")
+    handlers: list[logging.Handler] = [logging.FileHandler(log_path, encoding="utf-8")]
+    if os.environ.get("VIBE_M5STACK_LOG_STDERR"):
+        handlers.append(logging.StreamHandler(sys.stderr))
     logging.basicConfig(
-        level=os.environ.get("VIBE_M5STACK_LOG", "INFO"),
+        level=level,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        stream=sys.stderr,
+        handlers=handlers,
+        force=True,
     )
-    device: DeviceSession | None = None
-    if os.environ.get(_ENV_STATUS, "device").strip().lower() != "off":
-        device = DeviceSession()
-        if not device.start():
-            device = None
+    return Path(log_path)
+
+
+def main() -> None:
+    log_path = _setup_logging()
+    logger.info("proxy demarre, log: %s", log_path)
+
+    def make_device_session() -> DeviceSession | None:
+        if os.environ.get(_ENV_STATUS, "device").strip().lower() == "off":
+            return None
+        return DeviceSession()
+
     try:
-        asyncio.run(AppServerProxy(approver=make_approver(device), device=device).run())
+        asyncio.run(AppServerProxy(device_factory=make_device_session).run())
     except KeyboardInterrupt:
         pass
-    finally:
-        if device:
-            device.stop()
 
 
 if __name__ == "__main__":

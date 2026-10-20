@@ -92,6 +92,8 @@ class DeviceSession:
 
     def push_status(self, state: str, detail: str = "", activity: str = "") -> None:
         """Pousse un statut; sert aussi d'etat de reference du heartbeat."""
+        if not self.running or self.bridge is None:
+            return  # pas encore connecte (demarrage en tache de fond)
         with self._lock:
             self._seq += 1
             seq = self._seq

@@ -86,6 +86,7 @@ def proxy_command(record_path: Path, *, mode: str, tui: bool = True) -> tuple[li
     """Commande du proxy + env: le proxy lance le fake app server en enfant."""
     env = os.environ.copy()
     env["M5STACK_APPROVAL_MODE"] = mode
+    env["M5STACK_STATUS"] = "off"  # pas de sonde de port COM pendant les tests
     env["VIBE_M5STACK_REAL_APP_SERVER"] = " ".join(shlex.quote(part) for part in fake_server_command(record_path))
     env["VIBE_M5STACK_LOG"] = "WARNING"
     if not tui:
