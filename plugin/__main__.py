@@ -117,15 +117,13 @@ def _maybe_run_vibe3():
 
             env["M5STACK_APPROVAL_MODE"] = "device" if config.resolve_port() else "off"
         mode = env.get("M5STACK_APPROVAL_MODE", "off")
-        if mode == "device":
-            # Le M5Stack est LA surface d'approbation: la TUI n'affiche pas
-            # le dialogue. Sinon, quand le device arbitre (bouton ou voix),
-            # le dialogue TUI reste ouvert — le client TUI ne peut pas
-            # apprendre qu'un callback a ete arbitre ailleurs (mono-client
-            # par conception). M5STACK_APPROVAL_TUI=1 restaure la course
-            # TUI/device pour qui la veut.
-            env.setdefault("M5STACK_APPROVAL_TUI", "0")
-        print(f"[m5stack] Vibe 3.x: proxy app server en place (mode {mode})" , file=sys.stderr)
+        # Course TUI/device par defaut: la TUI reste une surface de
+        # validation complete (comme en 2.x), le device est l'accessoire.
+        # Apres un arbitrage device, le dialogue TUI reste affiche jusqu'a
+        # ce que l'utilisateur y reponde (reponse avalee proprement par le
+        # proxy) — la TUI est pilotee par requete: aucun message protocole
+        # ne peut retirer un dialogue deja affiche.
+        print(f"[m5stack] Vibe 3.x: proxy app server en place (mode {mode})", file=sys.stderr)
     else:
         print(
             "[m5stack] Vibe 3.x sans proxy: vibe-m5stack-app-server introuvable, "
