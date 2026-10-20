@@ -17,10 +17,12 @@ limitations under the License.
 # vibe-m5stack
 
 Télécommande physique **et vocale** pour [Mistral Vibe CLI](https://mistral.ai/)
-via un M5Stack Fire. Quand l'agent veut faire quelque chose de sensible (commit,
-push, écriture fichier critique), un écran s'allume sur le M5Stack avec un chat
-Mistral qui danse et tu valides au bouton — **ou à la voix** : maintiens un
-bouton, parle au device (micro embarqué), Voxtral transcrit. Ton instruction
+via un M5Stack Fire — compatible **Vibe 2.x et 3.x** (v0.7.0 : proxy app server
+au niveau protocole, voix Voxtral 3 émotionnelles). Quand l'agent veut faire
+quelque chose de sensible (commit, push, écriture fichier critique), un écran
+s'allume sur le M5Stack avec un chat Mistral qui danse et tu valides au
+bouton — **ou à la voix** : maintiens un bouton, parle au device (micro
+embarqué), Voxtral transcrit. Ton instruction
 démarre un tour dans Vibe, ton commentaire pilote la todo en cours, ta consigne
 motive un refus. Et l'agent te **répond à voix haute** : la réponse est lue par
 le haut-parleur du Fire (TTS Voxtral, voix FR ou EN au choix). LEDs latérales + matrices NeoPixel optionnelles aux ports B/C
@@ -39,9 +41,14 @@ pour signaler l'attente. Et sans PC, un mode démo transforme le device en vitri
 </p>
 
 ```
-PC (vibe-m5stack) ── hook Python ──> plugin/  (approbations, statuts, voix -> Voxtral)
+                 Vibe 3.x (v0.7.0)                    Vibe 2.x (legacy)
+ PC ── vibe-m5stack ──> TUI Rust ──> proxy app server ─┐   hook Python (monkey-patch AgentLoop)
+                        (vibe-rs)     vibe-m5stack     │        │
+                                          │            │        ▼
+            approbations au protocole (callback/call → bouton A/B/C,
+            attente illimitée), statuts, TTS, voix ◄────┴── plugin/ (approbations, statuts, voix -> Voxtral)
                                         │
-                            Bluetooth SPP  (ou USB Serial)
+                        Bluetooth SPP  (ou USB Serial)
      statuts, approbations, acks,      ▼   ▲  réponses boutons + audio µ-law
      audio TTS streamé (réponses lues)  │  │  streamé pendant la dictée
                                  M5Stack Fire (firmware/)
@@ -80,6 +87,12 @@ Détecte automatiquement ton M5Stack et sauvegarde la configuration.
 vibe-m5stack
 ```
 Le plugin se lance avec Vibe et intercepte les demandes d'approbation.
+Sous **Vibe 3.x**, l'interception passe par un proxy app server (section
+suivante) ; sous **Vibe 2.x**, par le hook Python legacy — le wrapper
+choisit tout seul selon la version installée.
+
+Bonus sans Vibe : `vibe-m5stack demo` joue l'histoire de Renard sur le
+haut-parleur du Fire (vitrine PC, cf. mode démo).
 
 ### 5️⃣ **Diagnostic**
 En cas de problème :
@@ -87,6 +100,47 @@ En cas de problème :
 vibe-m5stack doctor
 ```
 Vérifie que tout est correctement configuré (pyserial, port, firmware, entrypoints).
+
+---
+
+## 🧩 Vibe 3.x : le proxy app server (v0.7.0)
+
+La TUI de Mistral Vibe 3.0 est un binaire Rust (`vibe-rs`) qui pilote un
+**app server Python** en JSON-RPC — impossible à monkey-patcher comme en
+2.x. Le plugin s'y insère donc au niveau protocole : le wrapper positionne
+`VIBE_APP_SERVER_BIN` sur `vibe-m5stack-app-server`, un **proxy** qui lance
+le vrai app server et relaie tout, en interceptant les callbacks
+d'approbation (`callback/call` → écran device → bouton A/B/C →
+`callback/result`). **Attente illimitée** : le callback reste ouvert
+jusqu'au bouton, quoi qu'il arrive. La course TUI/device est le
+comportement par défaut — les deux écrans s'affichent, **premier
+répondant gagne** (la réponse tardive de l'autre surface est avalée
+proprement).
+
+Le proxy est aussi **propriétaire du port M5Stack** pendant la session :
+statuts poussés en continu (thinking/tool_exec/waiting/done, heartbeat
+3 s), TTS des réponses, dictée → STT Voxtral 3 → tour injecté dans
+l'agent, rejet vocal d'une approbation avec ta raison dictée.
+
+Variables d'environnement :
+
+| Variable | Valeurs | Effet |
+|---|---|---|
+| `M5STACK_APPROVAL_MODE` | `off` / `auto-approve` / `auto-deny` / `device` (défaut si port résolu) | Arbitrage des approbations |
+| `M5STACK_APPROVAL_TUI` | `1` (défaut) / `0` | `0` : la TUI n'affiche pas les approbations, le device arbitre seul |
+| `M5STACK_STATUS` | `device` (défaut) / `off` | Statuts + heartbeat sur le device |
+| `M5STACK_TTS` | `auto` (défaut, suit le menu Voice Out) / `force` / `off` | Lecture des réponses |
+| `M5STACK_TTS_MODEL` / `M5STACK_STT_MODEL` | IDs de modèles | Défauts : `voxtral-mini-tts-3-0` / `voxtral-mini-transcribe-3-0` |
+
+Logs du proxy : `%TEMP%\vibe-m5stack-proxy.log` (`VIBE_M5STACK_LOG=DEBUG`
+pour le détail, `VIBE_M5STACK_LOG_FILE` pour changer l'emplacement) — la
+TUI Rust avale la stderr, d'où le fichier.
+
+> ⚠️ **Limite connue, symétrique** : aucune des deux surfaces ne peut
+> retirer le dialogue de l'autre (TUI pilotée par requête, écran device
+> clos par bouton ou timeout 50 s). Après un arbitrage device, le dialogue
+> TUI se ferme quand tu y réponds ; après un arbitrage TUI, l'écran device
+> se vide de lui-même au timeout.
 
 ---
 
@@ -126,6 +180,13 @@ lue à voix haute par le haut-parleur du Fire** (synthèse Voxtral TTS, streamé
 en G.711 µ-law sur le Bluetooth). Le message est nettoyé avant lecture (blocs de
 code et markdown retirés) et lu **en intégralité** — n'importe quel bouton
 interrompt la lecture, et une nouvelle dictée (A long) la coupe aussi.
+
+**v0.7.0 — voix émotionnelles (Voxtral 3)** : la voix suit le ton de la
+réponse. Marie existe en cinq humeurs vérifiées sur l'API
+(`voxtral-mini-tts-3-0`) — `fr_marie_neutral`, `_happy`, `_sad`, `_excited`,
+`_angry` — et le proxy choisit selon le ton du texte (réussite → joie,
+échec → tristesse, refus → colère, enthousiasme → excitation), sans appel
+LLM supplémentaire.
 
 Deux réglages au menu de configuration :
 
@@ -176,6 +237,11 @@ d'accueil, le device enchaîne **les 7 animations LED** (welcome, les 4 activit�
 de thinking, waiting, done), chaque état légendé à l'écran dans sa couleur, chat
 animé — ou Chaton Fat — en vedette. N'importe quel bouton pour sortir. Parfait
 pour un salon, un stand, ou montrer l'objet sans ouvrir un terminal.
+
+**Démo pilotée par PC (v0.7.0)** : `vibe-m5stack demo` connecte le device et
+joue **l'histoire de Renard** — dix scènes en cinq voix de Marie (neutre,
+excitée, en colère, triste, heureuse), sans Vibe ni session. L'audio est
+synthétisé à la volée par Voxtral 3, donc aucune flash à prévoir.
 
 *(Anecdote : cette feature a été spécifiée à la voix, depuis le canapé, via le
 device lui-même — dictée à l'agent, approuvée aux boutons, reviewée, flashée.)*
