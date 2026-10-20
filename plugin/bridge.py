@@ -270,6 +270,11 @@ class M5StackBridge:
                                 # stopper le stream côté PC aussi.
                                 if isinstance(msg, dict) and msg.get("type") == "tts_stop":
                                     try:
+                                        from plugin import tts_speaker
+                                        tts_speaker.stop_all()
+                                    except Exception as e:
+                                        logger.debug(f"tts_speaker stop routing: {e}")
+                                    try:
                                         from plugin import tts_handler
                                         tts_handler.stop_playback()
                                     except Exception as e:

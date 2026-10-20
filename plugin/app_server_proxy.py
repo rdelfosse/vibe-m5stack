@@ -70,6 +70,7 @@ _ENV_MODE = "M5STACK_APPROVAL_MODE"
 _ENV_TUI = "M5STACK_APPROVAL_TUI"
 _ENV_REAL_SERVER = "VIBE_M5STACK_REAL_APP_SERVER"
 _ENV_STATUS = "M5STACK_STATUS"
+_ENV_TTS = "M5STACK_TTS"
 
 
 def status_from_notification(method: str, params: dict) -> tuple[str, str, str] | None:
@@ -292,6 +293,7 @@ class AppServerProxy:
         self.proc: asyncio.subprocess.Process | None = None
         self.router: ApprovalRouter | None = None
         self.last_event_id = 0
+        self._speak_task: asyncio.Task[None] | None = None
 
     async def run(
         self,
@@ -394,6 +396,15 @@ class AppServerProxy:
 
     async def _on_client_request(self, rid: int, method: str, params: dict) -> None:
         assert self.left and self.right and self.router
+        if method == "initialize":
+            logger.info("initialize TUI: capabilities=%s", params.get("capabilities"))
+            # La TUI peut desactiver des notifications (mode -p notamment);
+            # le proxy, lui, a besoin du flux complet (statuts, TTS). On
+            # retire la desactivation cote proxy: le serveur notifie tout,
+            # le proxy filtre ce qu'il renvoie a la TUI.
+            capabilities = params.get("capabilities") or {}
+            if capabilities.pop("disabledNotifications", None):
+                logger.info("disabledNotifications retire par le proxy")
         callback_id = (params.get("result") or {}).get("callbackId") if method == "callback/result" else None
         if callback_id:
             if callback_id in self.router.answered:
@@ -466,6 +477,7 @@ class AppServerProxy:
 
     async def _on_server_notification(self, method: str, params: dict) -> None:
         assert self.left
+        logger.debug("notification serveur: %s", method)
         event_id = params.get("eventId")
         if isinstance(event_id, int) and event_id > self.last_event_id:
             self.last_event_id = event_id
@@ -475,8 +487,68 @@ class AppServerProxy:
             if mapped:
                 state, detail, activity = mapped
                 await asyncio.to_thread(self.device.push_status, state, detail, activity)
+        if method == "turn/started":
+            from plugin import tts_speaker
+
+            tts_speaker.stop_all()  # nouveau tour: couper la lecture en cours
+        elif method == "turn/completed":
+            # reference gardee: close() attend cette lecture avant de mourir
+            # (en -p, le client sort des la reponse; sans cette attente, la
+            # tache TTS est tuee en pleine synthese).
+            self._speak_task = asyncio.get_running_loop().create_task(
+                self._speak_last_reply(str(params.get("sessionId") or ""))
+            )
+
+    async def _speak_last_reply(self, session_id: str) -> None:
+        """Lit la derniere reponse de l'agent sur le device (menu Voice Out)."""
+        mode = os.environ.get(_ENV_TTS, "auto").strip().lower()
+        if mode == "off" or not self.device or not self.right or not session_id:
+            return
+        bridge = getattr(self.device, "bridge", None)
+        if bridge is None:
+            return
+        if mode != "force" and getattr(bridge, "voice_out_mode", None) != "device":
+            return  # le menu Voice Out du device decide
+        try:
+            response = await self.right.request(
+                "session/read",
+                {"sessionId": session_id, "history": {"limit": 30}, "turns": {"limit": 1}},
+            )
+        except (TimeoutError, AppServerProtocolError) as exc:
+            logger.warning("TTS: session/read impossible: %s", exc)
+            return
+        history = (response.get("result") or {}).get("state", {}).get("history") or []
+        text = ""
+        for entry in reversed(history):
+            if entry.get("role") == "assistant" and entry.get("type") == "message":
+                parts = [
+                    block.get("text") or ""
+                    for block in entry.get("content") or []
+                    if block.get("type") == "text"
+                ]
+                text = "\n".join(part for part in parts if part).strip()
+                break
+        if not text:
+            return
+        from plugin import tts_speaker
+
+        await tts_speaker.speak(text, bridge)
 
     async def close(self) -> None:
+        # Laisser finir la lecture TTS en cours (bornee): le stream device
+        # n'utilise ni le client ni l'app server, mais la synthese et le
+        # session/read precedent doivent se terminer.
+        if self._speak_task and not self._speak_task.done():
+            logger.info("attente de la lecture TTS en cours...")
+            try:
+                await asyncio.wait_for(asyncio.shield(self._speak_task), timeout=45.0)
+            except TimeoutError:
+                logger.warning("lecture TTS trop lente, abandon")
+                self._speak_task.cancel()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - la tache logue deja
+                logger.warning("lecture TTS en erreur: %s", exc)
         if self.left:
             await self.left.close()
         if self.right:

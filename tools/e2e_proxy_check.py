@@ -36,12 +36,19 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from plugin.app_server_client import AppServerClient  # noqa: E402
 
-DECISION = sys.argv[1] if len(sys.argv) > 1 else "approve"
-MODE = "auto-approve" if DECISION == "approve" else "auto-deny"
-PROMPT = (
-    "Cree le fichier cible.txt dans le repertoire de travail avec le contenu "
-    "'e2e proxy'. Utilise l'outil write_file. Reponds juste OK ensuite."
-)
+DECISION = sys.argv[1] if len(sys.argv) > 1 else "speak"
+SPEAK_MODE = DECISION == "speak"
+MODE = "off" if SPEAK_MODE else ("auto-approve" if DECISION == "approve" else "auto-deny")
+if SPEAK_MODE:
+    PROMPT = (
+        "Ne cree aucun fichier. Reponds uniquement par cette phrase exacte: "
+        "bonjour, je suis la voix de ton agent sur le M5Stack."
+    )
+else:
+    PROMPT = (
+        "Cree le fichier cible.txt dans le repertoire de travail avec le contenu "
+        "'e2e proxy'. Utilise l'outil write_file. Reponds juste OK ensuite."
+    )
 
 
 def log(msg: str) -> None:
@@ -54,9 +61,10 @@ async def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="m5stack-e2e-"))
     env = os.environ.copy()
     env["M5STACK_APPROVAL_MODE"] = MODE
-    env["M5STACK_STATUS"] = "off"  # pas de sonde de port sans materiel
     env["PYTHONPATH"] = str(REPO_ROOT)
     env.setdefault("VIBE_M5STACK_LOG", "INFO")
+    # M5STACK_STATUS reste par defaut "device": avec un M5Stack branche, ce
+    # test pousse aussi les statuts et lit la reponse en TTS sur le device.
 
     proxy_command = [sys.executable, "-m", "plugin.app_server_proxy"]
     client = AppServerClient(proxy_command, client_name="vibe-m5stack-e2e", env=env)
@@ -79,6 +87,14 @@ async def main() -> int:
                 for block in entry.get("content") or []:
                     if block.get("type") == "text" and block.get("text"):
                         log(f"assistant: {block['text'][:200]}")
+
+    if SPEAK_MODE:
+        # le proxy attend la lecture TTS pendant son close(): on lui laisse
+        # le temps de diffuser avant de quitter (cf. attente dans close()).
+        log("attente de la lecture TTS cote device...")
+        await asyncio.sleep(12)
+        log("SUCCES (TTS)")
+        return 0
 
     cible = workdir / "cible.txt"
     exists = cible.exists()
