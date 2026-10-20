@@ -19,6 +19,13 @@ Integration test for the M5Stack approval hook.
 Tests that the hook properly patches AgentLoop and VibeApp.
 """
 
+import pytest
+
+# Tests du flow legacy Vibe 2.x (monkey-patch AgentLoop) : les internes
+# n'existent pas sous Vibe 3.x (le flow 3.x passe par le proxy app server,
+# teste dans test_app_server_*.py / test_device_status.py / test_voice_input.py).
+pytest.importorskip("vibe.core.agent_loop", reason="Vibe 2.x requis (internes absentes en 3.x)")
+
 import asyncio
 import sys
 from pathlib import Path

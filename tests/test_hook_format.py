@@ -15,6 +15,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """"""Tests for format_tool_info from plugin.vibe_m5stack_hook."""
 
+import pytest
+
+# Tests du flow legacy Vibe 2.x (monkey-patch AgentLoop) : les internes
+# n'existent pas sous Vibe 3.x (le flow 3.x passe par le proxy app server,
+# teste dans test_app_server_*.py / test_device_status.py / test_voice_input.py).
+pytest.importorskip("vibe.core.agent_loop", reason="Vibe 2.x requis (internes absentes en 3.x)")
+
 from pydantic import BaseModel
 
 # mistral-vibe >= 2.23 est une dépendance dure : on importe le hook avec les
