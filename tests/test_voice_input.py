@@ -47,13 +47,18 @@ def make_approval(cid: str) -> ApprovalRequest:
     return ApprovalRequest(callback_id=cid, session_id="s", tool="t", choices=["approve", "deny"])
 
 
-def test_transcriber_override_bypasses_legacy_gate():
+def test_transcriber_override_bypasses_legacy_gate(monkeypatch):
     """Régression: la barriere transcription_available() du legacy (cle via
     vibe 2.x, indisponible sous Vibe 3) ne doit pas bloquer le chemin REST."""
     import base64
     import time
+    from unittest.mock import MagicMock
 
     from plugin.voice_handler import VoiceHandler
+
+    # VoiceInput touche PortAudio (absent sur les runners CI) : mock du
+    # singleton — le chemin override ne l'utilise de toute facon pas.
+    monkeypatch.setattr("plugin.voice_handler.get_voice_input", lambda: MagicMock())
 
     class LegacyIndisponible:
         def transcription_available(self):
