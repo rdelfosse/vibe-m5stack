@@ -22,6 +22,12 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
   TUI/device : premier répondant gagne, réponse TUI tardive avalée.
   Modes : `off`, `auto-approve`, `auto-deny` (tests), `device` ;
   `M5STACK_APPROVAL_TUI=0` pour que le device arbitre seul.
+- **Défaut device-only** : quand le wrapper active le mode `device`, il pose
+  aussi `M5STACK_APPROVAL_TUI=0` — la TUI n'affiche pas de dialogue
+  d'approbation. Sinon le dialogue TUI reste ouvert après un arbitrage
+  bouton/voix du device (le client TUI ne peut pas apprendre qu'un
+  callback a été arbitré ailleurs). `M5STACK_APPROVAL_TUI=1` restaure la
+  course TUI/device.
 - **Statuts device** : le proxy devient propriétaire du port M5Stack
   (connexion persistante, heartbeat 3 s) et mappe les notifications app
   server vers les états firmware (thinking/reasoning, tool_exec avec nom
