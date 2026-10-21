@@ -38,8 +38,9 @@ def test_demo_sans_device(monkeypatch):
 
 
 async def test_play_story_avec_synth_injecte():
-    """L'histoire se joue scène par scène avec les voix de mise en scène."""
-    played: list[tuple[str, str]] = []
+    """L'histoire se joue scène par scène: voix de mise en scène + états
+    écran/LED poussés avant chaque lecture."""
+    played: list[tuple[str, object]] = []
 
     class FakeBridge:
         voice_out_mode = "device"
@@ -47,6 +48,10 @@ async def test_play_story_avec_synth_injecte():
 
         def send(self, message):
             played.append((message.get("type"), message.get("seq")))
+            return True
+
+        def send_status(self, state, detail="", seq=0, activity=""):
+            played.append(("status", {"state": state, "activity": activity, "seq": seq}))
             return True
 
     def fake_synth(text, voice):
@@ -61,7 +66,12 @@ async def test_play_story_avec_synth_injecte():
     assert len(synths) == len(demo.HISTOIRE)
     # les voix passées au synth sont celles de la mise en scène, pas pick_voice
     assert [s[1] for s in synths] == [voice for voice, _ in demo.HISTOIRE]
-    # chaque scène a été diffusée jusqu'au tts_end
-    assert played.count(("tts_end", None)) >= len(demo.HISTOIRE) or (
-        "tts_end" in [p[0] for p in played]
-    )
+    # chaque scène est précédée d'un statut écran/LED correspondant
+    statuses = [p[1] for p in played if p[0] == "status"]
+    attendus = [demo.EMOTION_SHOW[demo._emotion_of(v)] for v, _ in demo.HISTOIRE]
+    assert len(statuses) == len(attendus) + 1  # + le statut final
+    for i, (state, activity) in enumerate(attendus):
+        assert statuses[i]["state"] == state
+        assert statuses[i]["activity"] == activity
+    # final: retour au repos
+    assert statuses[-1]["state"] == "done"

@@ -91,7 +91,7 @@ Sous **Vibe 3.x**, l'interception passe par un proxy app server (section
 suivante) ; sous **Vibe 2.x**, par le hook Python legacy — le wrapper
 choisit tout seul selon la version installée.
 
-Bonus sans Vibe : `vibe-m5stack demo` joue l'histoire de Renard sur le
+Bonus sans Vibe : `vibe-m5stack demo` joue l'histoire de Salem sur le
 haut-parleur du Fire (vitrine PC, cf. mode démo).
 
 ### 5️⃣ **Diagnostic**
@@ -239,7 +239,7 @@ animé — ou Chaton Fat — en vedette. N'importe quel bouton pour sortir. Parf
 pour un salon, un stand, ou montrer l'objet sans ouvrir un terminal.
 
 **Démo pilotée par PC (v0.7.0)** : `vibe-m5stack demo` connecte le device et
-joue **l'histoire de Renard** — dix scènes en cinq voix de Marie (neutre,
+joue **l'histoire de Salem** — dix scènes en cinq voix de Marie (neutre,
 excitée, en colère, triste, heureuse), sans Vibe ni session. L'audio est
 synthétisé à la volée par Voxtral 3, donc aucune flash à prévoir.
 

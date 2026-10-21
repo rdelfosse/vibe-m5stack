@@ -464,7 +464,7 @@ def main() -> int:
 Exemples:
   vibe-m5stack setup       # Détecter et configurer le port
   vibe-m5stack doctor      # Diagnostic du système
-  vibe-m5stack demo        # L'histoire de Renard sur le device
+  vibe-m5stack demo        # L'histoire de Salem sur le device
   vibe-m5stack             # Lancer Vibe (comme avant)
         """
     )
@@ -490,8 +490,8 @@ Exemples:
     # Demo command
     demo_parser = subparsers.add_parser(
         "demo",
-        help="L'histoire de Renard sur le M5Stack",
-        description="Mode démo piloté par PC: joue l'histoire de Renard en voix "
+        help="L'histoire de Salem sur le M5Stack",
+        description="Mode démo piloté par PC: joue l'histoire de Salem en voix "
         "émotionnelles (Voxtral 3) sur le haut-parleur du device, sans Vibe."
     )
     demo_parser.set_defaults(func=_cmd_demo)

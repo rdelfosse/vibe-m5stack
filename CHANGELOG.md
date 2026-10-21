@@ -10,6 +10,16 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
 
+### Ajouté
+- **Mise en scène de la démo** : `vibe-m5stack demo` pilote aussi l'écran et
+  les LEDs — chaque scène pousse l'état correspondant à l'émotion avant de
+  parler (thinking/reasoning cyan, streaming, tool_exec, waiting jaune,
+  done vert), le chat danse pendant que le device parle (pastille de
+  parole gérée par le firmware pendant le stream TTS). Sans reflash : le
+  protocole `status` existant suffit.
+- **Salem** : le héros de l'histoire s'appelle désormais Salem (le chat
+  parlant de Sabrina) — un chat qui parle, pas un renard.
+
 ## [0.7.0] - 2026-10-20
 
 ### Ajouté
