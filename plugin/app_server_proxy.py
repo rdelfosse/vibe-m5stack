@@ -369,6 +369,10 @@ class AppServerProxy:
         self._speak_task: asyncio.Task[None] | None = None
         self.session_id: str | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        #: Console script: watch-dog de sortie arme dans close() — un close()
+        #: qui se bloque (fermeture serie BT sous Windows) ne doit jamais
+        #: laisser un zombie tenir le port SPP. Desactive en tests.
+        self.exit_watchdog = False
 
     async def run(
         self,
@@ -619,6 +623,17 @@ class AppServerProxy:
         await tts_speaker.speak(text, bridge)
 
     async def close(self) -> None:
+        if self.exit_watchdog:
+            # filet de securite: si le nettoyage se bloque (fermeture du port
+            # Bluetooth SPP sous Windows notamment), mourir quand meme — un
+            # proxy zombie garderait COMx ouvert et le device "ne se connecte
+            # plus" pour toutes les sessions suivantes.
+            import os
+            import threading
+
+            timer = threading.Timer(20.0, os._exit, args=(0,))
+            timer.daemon = True
+            timer.start()
         # Laisser finir la lecture TTS en cours (bornee): le stream device
         # n'utilise ni le client ni l'app server, mais la synthese et le
         # session/read precedent doivent se terminer.
@@ -683,6 +698,7 @@ def main() -> None:
         )
 
     proxy = AppServerProxy(device_factory=make_device_session)
+    proxy.exit_watchdog = True
     try:
         asyncio.run(proxy.run())
     except KeyboardInterrupt:
