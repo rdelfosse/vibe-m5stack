@@ -10,6 +10,8 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-20
+
 ### Ajouté
 - **Mise en scène de la démo** : `vibe-m5stack demo` pilote aussi l'écran et
   les LEDs — chaque scène pousse l'état correspondant à l'émotion avant de
@@ -19,6 +21,14 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
   protocole `status` existant suffit.
 - **Salem** : le héros de l'histoire s'appelle désormais Salem (le chat
   parlant de Sabrina) — un chat qui parle, pas un renard.
+
+### Corrigé
+- **Proxy zombie tenant le port Bluetooth** : à la fermeture d'une session,
+  le `close()` du proxy pouvait se bloquer sur la fermeture du port série
+  BT sous Windows — le processus survivait et gardait COMx ouvert (SPP
+  exclusif), le device « ne se connectait plus ». Watch-dog de sortie :
+  en console script, `os._exit(0)` forcé 20 s après l'entrée dans
+  `close()` ; un nettoyage normal ne le déclenche jamais.
 
 ## [0.7.0] - 2026-10-20
 
