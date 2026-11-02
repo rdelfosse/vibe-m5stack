@@ -10,6 +10,16 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
 
 ## [Unreleased]
 
+### Corrigé
+- **Serveur MCP cassé sous Vibe 3.x** : `m5stack-mcp-server` plantait au
+  démarrage (`'Server' object has no attribute 'list_tools'`). Vibe 3.0.4
+  épingle `mcp==2.3.0`, dont l'API serveur a remplacé les décorateurs
+  `@server.list_tools()` / `@server.call_tool()` par des handlers `on_*`
+  passés au constructeur. `mcp_server.py` détecte l'API et supporte les
+  deux SDK (mcp 1.x sous Vibe 2.x, mcp 2.x sous Vibe 3.x). Les erreurs du
+  tool (device absent, port série) restent renvoyées en résultat
+  `isError` lisible par le LLM, comme en 1.x.
+
 ## [0.7.1] - 2026-10-20
 
 ### Ajouté

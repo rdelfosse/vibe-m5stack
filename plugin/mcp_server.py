@@ -128,14 +128,14 @@ def get_bridge() -> M5StackBridge:
     return _bridge
 
 
-server = Server("m5stack-approval")
+SERVER_NAME = "m5stack-approval"
+TOOL_NAME = "request_human_approval"
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
+def _tools() -> list[Tool]:
     return [
         Tool(
-            name="request_human_approval",
+            name=TOOL_NAME,
             description=(
                 "Block until the user confirms or rejects via the physical "
                 "M5Stack device. Button A=approve, B=reject, C=cancel. "
@@ -159,11 +159,12 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    if name != "request_human_approval":
+async def _run_tool(name: str, arguments: Optional[dict]) -> list[TextContent]:
+    """Logique métier du tool, indépendante de la version du SDK MCP."""
+    if name != TOOL_NAME:
         raise ValueError(f"Unknown tool: {name}")
 
+    arguments = arguments or {}
     title = arguments["title"]
     body = arguments.get("body", "")
 
@@ -181,6 +182,52 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         }
 
     return [TextContent(type="text", text=json.dumps(result))]
+
+
+# Le SDK MCP a changé d'API en 2.x : les décorateurs `@server.list_tools()` /
+# `@server.call_tool()` ont disparu au profit de handlers `on_*` passés au
+# constructeur, de signature `(ctx, params)`. Vibe 2.x embarque mcp 1.x,
+# Vibe 3.x épingle mcp 2.x : on supporte les deux, par détection de l'API.
+if hasattr(Server, "list_tools"):
+    # --- mcp 1.x : enregistrement par décorateurs ---
+    server = Server(SERVER_NAME)
+
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        return _tools()
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        # Le décorateur 1.x convertit lui-même une exception en résultat
+        # `isError=True`, lisible par le LLM.
+        return await _run_tool(name, arguments)
+
+else:
+    # --- mcp 2.x : handlers passés au constructeur ---
+    from mcp.types import CallToolResult, ListToolsResult
+
+    async def list_tools(ctx, params) -> ListToolsResult:
+        return ListToolsResult(tools=_tools())
+
+    async def call_tool(ctx, params) -> CallToolResult:
+        # En 2.x, une exception levée par le handler devient une erreur
+        # JSON-RPC. On conserve le comportement 1.x (device absent, timeout
+        # série…) : un résultat `is_error` que le LLM peut lire.
+        try:
+            content = await _run_tool(params.name, params.arguments)
+        except Exception as e:
+            logger.warning(f"{params.name} failed: {e}")
+            return CallToolResult(
+                content=[TextContent(type="text", text=str(e))],
+                is_error=True,
+            )
+        return CallToolResult(content=content)
+
+    server = Server(
+        SERVER_NAME,
+        on_list_tools=list_tools,
+        on_call_tool=call_tool,
+    )
 
 
 async def amain() -> None:
