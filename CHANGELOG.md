@@ -20,6 +20,11 @@ et la version *patch* (0.0.Y) pour les corrections de bugs.
   tool (device absent, port série) restent renvoyées en résultat
   `isError` lisible par le LLM, comme en 1.x.
 
+### Changé
+- **Dépendance** : `mcp>=1.0.0,<3`. L'absence de borne supérieure a laissé
+  passer la rupture d'API de mcp 2 ; la prochaine majeure devra être
+  validée avant d'élargir la borne.
+
 ## [0.7.1] - 2026-10-20
 
 ### Ajouté

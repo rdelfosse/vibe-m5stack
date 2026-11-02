@@ -27,7 +27,9 @@ dependencies = [
     "mistral-vibe>=2.23",
     "pyserial>=3.5",
     "sounddevice>=0.4.6",
-    "mcp>=1.0.0",
+    # mcp 1.x (Vibe 2.x) et 2.x (Vibe 3.x, epingle mcp==2.x) supportes par
+    # plugin/mcp_server.py ; borne <3 : une majeure casse l'API serveur.
+    "mcp>=1.0.0,<3",
     "aiohttp>=3.8.0",
     "filelock>=3.13",
 ]
